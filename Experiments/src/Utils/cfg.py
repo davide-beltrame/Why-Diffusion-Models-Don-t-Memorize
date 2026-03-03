@@ -3,16 +3,17 @@ import calc
 import numpy as np
 import torch
 import loader
+import os
 
 def load_config(DATASET):
     config = Diffusion.TrainingConfig()
     config.DATASET = DATASET             # Dataset name
     
     if DATASET == 'CelebA':
-        config.path_save = '../../Saves/'          # Path to save results from Experiments/src/FOLDER/
+        config.path_save = '../../Saves_new/'          # Path to save results from Experiments/src/FOLDER/
         config.IMG_SHAPE = (1, 32, 32)
         config.BATCH_SIZE = 512
-        config.path_data = '../../Data/CelebA/'    # Path to CelebA dataset from Experiments/src/FOLDER/
+        config.path_data = os.path.join(os.environ["WORK"], 'datasets/celeba/')
         config.CENTER = True
         config.STANDARDIZE = False
         config.n_images = 1024
@@ -48,7 +49,9 @@ def load_training_data(config, index, loadtest=False):
         
     # Torch Tensor version
     size = config.IMG_SHAPE[1]
-    all_images = torch.load(config.path_data + '{:s}{:d}.pt'.format(config.DATASET, size))
+    #all_images = torch.load(config.path_data + '{:s}{:d}.pt'.format(config.DATASET, size))
+    #all_images = torch.load(os.path.join(config.path_data, 'train{}x{}.pt'.format(size, size)))
+    all_images = torch.load(os.path.join(config.path_data, 'CelebA32.pt'))
     trainset, testset = loader.load_CelebA_pt(config, all_images, loadtest=loadtest, index=index)
     
     return trainset, testset

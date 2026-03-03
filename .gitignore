@@ -1,8 +1,10 @@
 *script_run.slurm
 .DS_Store
 Experiments/Data
-Experiments/Saves/**
+Experiments/Saves*
 Experiments/src/Plots/*
+Experiments/Plots/*
+Experiments/inference_outputs/*
 Experiments/src/Analysis/*
 
 # Byte-compiled / optimized / DLL files

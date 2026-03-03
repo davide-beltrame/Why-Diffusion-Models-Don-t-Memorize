@@ -21,8 +21,12 @@ class CelebADataset(Dataset):
       root_dir (string): Directory with all the images
       transform (callable, optional): transform to be applied to each image sample
     """
-    # Get image names
-    image_names = os.listdir(root_dir)
+    # Get image names - filter only valid image extensions
+    valid_extensions = {'.jpg', '.jpeg', '.png'}
+    image_names = [
+        f for f in os.listdir(root_dir)
+        if os.path.splitext(f)[1].lower() in valid_extensions
+    ]
 
     self.root_dir = root_dir
     self.transform = transform 

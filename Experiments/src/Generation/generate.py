@@ -33,7 +33,7 @@ parser.add_argument('--device', type=str,
 
 args = parser.parse_args()
 print(args)
-DATASET = args.dataset
+DATASET = 'CelebA'
 config = cfg.load_config(DATASET)   # Load base config for this dataset
 n_base = int(args.nbase)
 config.DEVICE = args.device
@@ -77,7 +77,8 @@ batch_gen = 100
 Ns = Nsamples // batch_gen
 
 # Define the training times to sample models
-training_times = cfg.get_training_times()
+#training_times = cfg.get_training_times()
+training_times = np.linspace(0, 10000-1, 30, dtype=int)[1:]
 
 # Loop over training times
 for (j, checkpoint_id) in enumerate(training_times):
@@ -85,8 +86,8 @@ for (j, checkpoint_id) in enumerate(training_times):
     
     # Load the model
     try:
-        model_suffix = '/Model_{:d}'.format(checkpoint_id)
-        path_model_diffusion = config.path_save + type_model + '/Models/' + model_suffix
+        model_suffix = '/Model_epoch_{:d}'.format(checkpoint_id)
+        path_model_diffusion = config.path_save + type_model + 'Models' + model_suffix
         model_diffusion = loader.load_model(model_diffusion, path_model_diffusion)
     except:
         raise NameError('The checkpoint does not exist: {:s}'.format(path_model_diffusion))
@@ -99,13 +100,16 @@ for (j, checkpoint_id) in enumerate(training_times):
             os.makedirs(path_save)
         
         print('Sample {:d}/{:d}'.format(i, Ns))
-        samples_gen, samples_init = Diffusion.sample_diffusion_from_noise_DDIM(model_diffusion,
-                                            n_images=batch_gen,
-                                            config=config,
-                                            df=df,
-                                            dim=4,
-                                            eta=0.0,            # Deterministic trajectories
-                                            ddim_steps=100)     # Number of steps reduced (much faster)
+        # samples_gen, samples_init = Diffusion.sample_diffusion_from_noise_DDIM(model_diffusion,
+        #                                     n_images=batch_gen,
+        #                                     config=config,
+        #                                     df=df,
+        #                                     dim=4,
+        #                                     eta=0.0,            # Deterministic trajectories
+        #                                     ddim_steps=100)     # Number of steps reduced (much faster)
+                                    
+        samples_gen, samples_init = Diffusion.sample_diffusion_from_noise(model_diffusion, batch_gen, config, df, dim=4)
+
         # Save initial samples
         path = path_save + str(config.TIMESTEPS)
         # Create dir if does not exist

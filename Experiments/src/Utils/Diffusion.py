@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import torch
 from tqdm import trange
 import matplotlib.pyplot as plt
@@ -97,7 +98,7 @@ class DiffusionConfig:
 # ====================================================================
 # Diffusion functions
 # ==================================================================== 
-def forward_diffusion(df, x0, timesteps, config):
+def forward_diffusion(df, x0, timesteps, config, return_std=False):
     dim = len(x0.shape)
     # Generate noise realisation with the same size as a batch of images
     eps = torch.randn_like(x0)
@@ -108,6 +109,8 @@ def forward_diffusion(df, x0, timesteps, config):
     sample_a  = mean + std_dev * eps    # step t of the forward process
     
     # Return the noisy image and the noise realisation
+    if return_std:
+        return sample_a, eps, std_dev
     return sample_a, eps
 
 
@@ -148,17 +151,81 @@ def sample_diffusion_from_noise(model, n_images=25, config=TrainingConfig(),
         
         # Predict the noise at times ts
         eps_ts = model(x, ts)
-        
+
         # Get scaling quantities
         beta_t                            = get(df.beta, ts, dim)
         one_by_sqrt_alpha_t               = get(df.one_by_sqrt_alpha, ts, dim)
         sqrt_one_minus_alpha_cumulative_t = get(df.sqrt_one_minus_alpha_cumulative, ts, dim) 
-        
+
         # Langevin sampling from Ho et al., 2020
         x = (one_by_sqrt_alpha_t 
              * (x - (beta_t / sqrt_one_minus_alpha_cumulative_t) 
                 * eps_ts) + torch.sqrt(beta_t) * z)
     return x, x_init
+
+
+
+@torch.no_grad()
+def sample_diffusion_from_noise_det(model, n_images=25, config=TrainingConfig(),
+                                df=DiffusionConfig(), dim=3,
+                                x_init=None, seed=None):
+
+    # Optional: fix stochasticity via a local generator
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device=config.DEVICE)
+        generator.manual_seed(seed)
+
+    # Optional: use provided x_init (and infer n_images from it)
+    if x_init is None:
+        # Generate n_images starting points from N(0, 1)
+        if dim == 4:  # Assumes [B, C, H, W] for 2d
+            x_init = torch.randn(
+                n_images, config.IMG_SHAPE[0], config.IMG_SHAPE[1], config.IMG_SHAPE[2],
+                device=config.DEVICE, generator=generator
+            )
+        elif dim == 3:  # Assumes [B, C, N] for 1d
+            x_init = torch.randn(
+                n_images, config.IMG_SHAPE[0], config.IMG_SHAPE[1],
+                device=config.DEVICE, generator=generator
+            )
+        elif dim == 2:  # Assumes [B, N] for 1d (no channels)
+            x_init = torch.randn(
+                n_images, config.IMG_SHAPE[1],
+                device=config.DEVICE, generator=generator
+            )
+    else:
+        x_init = x_init.to(config.DEVICE)
+        n_images = x_init.shape[0]
+
+    x = x_init.clone()
+
+    model.eval()
+    for t in reversed(range(0, config.TIMESTEPS)):
+        # Time tensor
+        ts = torch.ones(n_images, dtype=torch.long, device=config.DEVICE) * t
+
+        # Generate one realisation of the noise (optionally deterministic via generator)
+        if t > 1:
+            z = torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=generator)
+        else:
+            z = torch.zeros_like(x)
+
+        # Get scaling quantities
+        beta_t                            = get(df.beta, ts, dim)
+        one_by_sqrt_alpha_t               = get(df.one_by_sqrt_alpha, ts, dim)
+        sqrt_one_minus_alpha_cumulative_t = get(df.sqrt_one_minus_alpha_cumulative, ts, dim)
+
+        # Predict the noise at times ts
+        eps_ts = model(x, ts)
+
+        # Langevin sampling from Ho et al., 2020
+        x = (one_by_sqrt_alpha_t
+             * (x - (beta_t / sqrt_one_minus_alpha_cumulative_t)
+                * eps_ts) + torch.sqrt(beta_t) * z)
+
+    return x, x_init
+
 
 
 @torch.no_grad()
@@ -247,6 +314,21 @@ def sample_diffusion_from_noise_DDIM(model, n_images=25, config=TrainingConfig()
 #==========================================
 # Training functions
 #==========================================
+
+def running_plot_train_test_loss(train_losses, test_losses, config, suffix):
+    """Plot training and test losses."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(train_losses, label='Train Loss')
+    ax.plot(test_losses, label='Test Loss')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_title('Training and Test Loss over Epochs')
+    ax.legend()
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+    fig.savefig(config.path_save + suffix + 'train_test_loss.png', bbox_inches='tight')
+    plt.close('all')
+
 def train_one_batch(X, model, optimizer, loss_fn, 
                     config=TrainingConfig(), 
                     df=DiffusionConfig()):
@@ -260,13 +342,11 @@ def train_one_batch(X, model, optimizer, loss_fn,
         ts = torch.ones((X.shape[0],), dtype=torch.long, device=config.DEVICE) * config.time_step
         
     # Extract noisy images from times t
-    X_t, noise_t = forward_diffusion(df, X, ts, config)
+    X_t, noise_t, std_dev = forward_diffusion(df, X, ts, config, return_std=True)
     X_t = X_t.to(config.DEVICE)
     
     # Apply the model
-    Y = model(X_t.float(), ts)
-    
-    # The loss is comparing the predicted and true noises
+    Y = model(X_t.float(), ts)    
     loss = loss_fn(noise_t, Y)
     
     # Update parameters of the model
@@ -277,9 +357,29 @@ def train_one_batch(X, model, optimizer, loss_fn,
     # Return the current loss and the batch of noisy images
     return loss.detach().item(), X_t
 
+def test_one_batch(X, model, loss_fn, 
+                    config=TrainingConfig(), 
+                    df=DiffusionConfig()):
+    model.eval()
+    with torch.no_grad():
+        # Generate random times
+        ts = torch.randint(low=1, high=config.TIMESTEPS, size=(X.shape[0],), device=config.DEVICE)
+        
+        # Extract noisy images from times t
+        X_t, noise_t, std_dev = forward_diffusion(df, X, ts, config, return_std=True)
+        X_t = X_t.to(config.DEVICE)
+        
+        # Apply the model
+        Y = model(X_t.float(), ts)
+
+        # The loss is comparing the predicted and true noises
+        loss = loss_fn(noise_t, Y)  
+
+    # Return the current loss and the batch of noisy images
+    return loss.detach().item(), X_t
 
 def train(model, trainloader, optimizer, config, df, loss_fn,
-          sweep=1., times_save=[], offset=0, suffix='', generate=False):
+          sweep=1., times_save=[], offset=0, suffix='', generate=False, valloader=None):
     
     n_steps = offset    # Number of SGD steps
     k_steps = 100       # Number of steps before printing
@@ -287,7 +387,15 @@ def train(model, trainloader, optimizer, config, df, loss_fn,
     bar = trange(config.N_STEPS, leave=True, position=0)
     bar.update(offset)
     
+    epochs_losses_train = []
+    epochs_losses_val = []
+    n_ep = 0
+    n_epochs_to_save = 50
+    max_epoch = 5000
+    #epochs_to_save = np.linspace(0, max_epoch-1, n_epochs_to_save, dtype=int)
+    epochs_to_save = np.linspace(10, max_epoch-1, n_epochs_to_save, dtype=int)
     while n_steps < config.N_STEPS:
+        epoch_loss = 0
         for i, X in enumerate(trainloader):
             X = X.to(config.DEVICE)
             
@@ -305,10 +413,11 @@ def train(model, trainloader, optimizer, config, df, loss_fn,
                     if len(X.shape) == 4: # For images, assumes [B, C, H, W]
                         samples, samples_init = sample_diffusion_from_noise(model, 16, config, df, dim=4)
                         fig = Plot.imshow(samples.cpu(), config.mean, config.std)
-                        fig.savefig(config.path_save + suffix + 'Images/' + 'Sample_{:d}.pdf'.format(n_steps), bbox_inches='tight')
+                        fig.savefig(config.path_save + suffix + 'Images/' + 'Sample_{:d}.png'.format(n_steps), bbox_inches='tight')
                         plt.close('all')
             
             loss, _, = train_one_batch(X, model, optimizer, loss_fn, config, df)
+            epoch_loss += loss 
             n_steps += 1            # Update number of steps
             
                         
@@ -320,6 +429,38 @@ def train(model, trainloader, optimizer, config, df, loss_fn,
             # If we performed all the steps, exit
             if n_steps >= config.N_STEPS:
                 break
+
+        epoch_loss /= (i+1)
+        #print(f'Epoch loss: {epoch_loss:.5f}')
+        n_ep += 1
+        #compute validation loss
+        if n_ep % 10 == 0:
+            epochs_losses_train.append(epoch_loss)
+            if valloader is not None:
+                val_loss = 0
+                for i, X in enumerate(valloader):
+                    X = X.to(config.DEVICE)
+                    loss, _ = test_one_batch(X, model, loss_fn, config, df)
+                    val_loss += loss
+                val_loss /= (i+1)
+                print(f'Validation loss: {val_loss:.5f}')
+                epochs_losses_val.append(val_loss)
+            if valloader is not None:
+                running_plot_train_test_loss(epochs_losses_train, epochs_losses_val, config, suffix)
+            else:
+                running_plot_train_test_loss(epochs_losses_train, epochs_losses_train, config, suffix)
+
+        if n_ep in epochs_to_save:
+            # Save model
+            p = config.path_save + suffix + 'Models/' + 'Model_epoch_{:d}'.format(n_ep)
+            torch.save(model.state_dict(), p)
+            print(f'Model at epoch {n_ep} saved.')
+            epochs_to_save = epochs_to_save[epochs_to_save != n_ep]
+
+        if n_ep >= max_epoch:
+            print(f'Maximum number of epochs {max_epoch} reached. Stopping training.')
+            break
+    bar.close()
             
     # Return nothing
     return
