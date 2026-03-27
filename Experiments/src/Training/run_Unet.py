@@ -43,6 +43,7 @@ lr = args['learning_rate']
 optim = args['optim']
 n_base = int(args['nbase'])
 seed = args['seed']
+are_same_run = args['are_same_run']
 time_step = args['time']
 if time_step == -1:
     mode = 'normal'
