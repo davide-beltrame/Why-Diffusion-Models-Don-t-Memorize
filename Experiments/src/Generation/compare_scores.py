@@ -35,10 +35,18 @@ parser.add_argument('--device', type=str, help='Device used to load and apply th
 parser.add_argument('--seed', type=int, default=0, help='Seed controlling x_init and reverse-process noise.')
 parser.add_argument('--seeds_run', help='Comma-separated list of seeds for multiple runs.', type=str, default=None)
 parser.add_argument('--out_dire', type=str, default=None)
+parser.add_argument('--suffix', type=str, default=None,
+                    help='Optional suffix appended to model folder names (e.g., PCA_L0).')
 
 
 parser.add_argument('--metric', type=str, default='pixel', choices=['pixel', 'resnet'],
                     help="Similarity metric: 'pixel' cosine or 'resnet' cosine in ResNet-50 feature space.")
+parser.add_argument('--data-file-0', type=str, default=None,
+                    help="Override: pre-split train .pt tensor for index 0.")
+parser.add_argument('--data-file-1', type=str, default=None,
+                    help="Override: pre-split train .pt tensor for index 1.")
+parser.add_argument('--data-test-file', type=str, default=None,
+                    help="Override: pre-split test .pt tensor.")
 args = parser.parse_args()
 print(args)
 
@@ -113,7 +121,23 @@ config.OPTIM = args.optim
 config.BATCH_SIZE = int(args.batch_size)
 config.LR = float(args.learning_rate)
 config.n_images = 40000
-biga, bigb = cfg.load_training_data(config, 0, loadtest=True)
+if args.data_file_0 is not None:
+    import torchvision.transforms as _tfms
+    _raw0 = torch.load(os.path.expanduser(args.data_file_0), weights_only=True)
+    _raw1 = torch.load(os.path.expanduser(args.data_file_1), weights_only=True) if args.data_file_1 else _raw0
+    _test_raw = torch.load(os.path.expanduser(args.data_test_file), weights_only=True) if args.data_test_file else None
+    _mean = torch.mean(_raw0, axis=[0, 2, 3])
+    _std = torch.ones(config.IMG_SHAPE[0])
+    _tfm = _tfms.Compose([_tfms.Normalize(_mean, _std)])
+    # build biga as concat of both splits so indexing works
+    biga = torch.cat([torch.stack([_tfm(x) for x in _raw0]),
+                      torch.stack([_tfm(x) for x in _raw1])], dim=0)
+    bigb = torch.stack([_tfm(x) for x in _test_raw]) if _test_raw is not None else biga[:0]
+    config.mean = _mean
+    config.std = _std
+    print(f'Loaded custom data: train0={_raw0.shape}, train1={_raw1.shape}, test={_test_raw.shape if _test_raw is not None else None}')
+else:
+    biga, bigb = cfg.load_training_data(config, 0, loadtest=True)
 
 
 if args.seeds_run is None:
@@ -173,15 +197,18 @@ for u_index, index in enumerate(range(args.index_start, args.index_end + 1)):
         noisy_images_test = (X_t_test, noise_t_test, std_dev_test)
 
 
-def build_type_model(index, seed_run_i=None, is_same=False):
+def build_type_model(index, seed_run_i=None, is_same=False, suffix=None):
     if is_same == False:
-        return '{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}/'.format(
+        model_name = '{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}'.format(
             config.DATASET, size, config.n_images, n_base, config.OPTIM, config.BATCH_SIZE, config.LR, index
         )
     else:   
-        return '{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}_seed{:d}/'.format(
+        model_name = '{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}_seed{:d}'.format(
             config.DATASET, size, config.n_images, n_base, config.OPTIM, config.BATCH_SIZE, config.LR, index, seed_run_i
         )
+    if suffix:
+        model_name += '_' + suffix.lstrip('_')
+    return model_name + '/'
 
 def build_model():
     m = Unet.UNet(
@@ -217,13 +244,13 @@ for (s1, s2) in seed_pairs:
 for (index_a, index_b) in index_pairs:
     if is_same == True:
         for (seed_i, seed_j) in seed_pairs_unordered:
-            type_model_a = build_type_model(index_a, seed_run_i=seed_i, is_same=is_same)
-            type_model_b = build_type_model(index_b, seed_run_i=seed_j, is_same=is_same)
+            type_model_a = build_type_model(index_a, seed_run_i=seed_i, is_same=is_same, suffix=args.suffix)
+            type_model_b = build_type_model(index_b, seed_run_i=seed_j, is_same=is_same, suffix=args.suffix)
             type_models.append((type_model_a, type_model_b, index_a, index_b))
             models.append((build_model(), build_model(), index_a, index_b))
     else:
-        type_model_a = build_type_model(index_a, is_same=is_same)
-        type_model_b = build_type_model(index_b, is_same=is_same)
+        type_model_a = build_type_model(index_a, is_same=is_same, suffix=args.suffix)
+        type_model_b = build_type_model(index_b, is_same=is_same, suffix=args.suffix)
         type_models.append((type_model_a, type_model_b, index_a, index_b))
         models.append((build_model(), build_model(), index_a, index_b))
 
@@ -232,9 +259,9 @@ batch_gen = 512
 Ns = Nsamples // batch_gen
 training_times = np.linspace(10, 5000 - 1, 50, dtype=int)[1:]
 
-if args.out_dire is not None:
-    config.path_save = args.out_dire 
-out_dir = os.path.join(config.path_save, "Comparisons")
+model_root = config.path_save
+out_root = args.out_dire if args.out_dire is not None else model_root
+out_dir = os.path.join(out_root, "Comparisons")
 os.makedirs(out_dir, exist_ok=True)
 
 plot_path = os.path.join(
@@ -269,8 +296,8 @@ for (j, checkpoint_id) in enumerate(training_times):
     for (k, ((type_model_a, type_model_b, index_a, index_b), (model_a, model_b, _, _))) in enumerate(zip(type_models, models)):
         print(f"  Comparing index {index_a} vs {index_b} ({k + 1}/{len(type_models)})")
 
-        path_a = config.path_save + type_model_a + 'Models' + model_suffix
-        path_b = config.path_save + type_model_b + 'Models' + model_suffix
+        path_a = model_root + type_model_a + 'Models' + model_suffix
+        path_b = model_root + type_model_b + 'Models' + model_suffix
 
         if not os.path.exists(path_a):
             raise NameError('The checkpoint does not exist: {:s}'.format(path_a))

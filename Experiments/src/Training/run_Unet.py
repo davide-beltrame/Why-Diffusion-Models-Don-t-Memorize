@@ -32,6 +32,10 @@ parser.add_argument("--steps", help="Number of training steps (default: 2e6)", t
 parser.add_argument("--save-every", help="Save checkpoint every N steps (overrides default schedule)", type=int, default=None)
 parser.add_argument("--num-checkpoints", help="Number of log-spaced checkpoints to save", type=int, default=None)
 parser.add_argument("--suffix", help="Suffix to append to save folder name", type=str, default=None)
+parser.add_argument("--data-file", type=str, default=None,
+                    help="Override: path to a pre-split train .pt tensor [N,1,H,W].")
+parser.add_argument("--data-test-file", type=str, default=None,
+                    help="Override: path to a pre-split test .pt tensor [M,1,H,W].")
 args = vars(parser.parse_args())
 print(args)
 
@@ -92,8 +96,8 @@ elif config.mode == 'fixed_time':
 
 # Append custom suffix if provided
 if args['suffix'] is not None:
-    suffix = suffix + '_' + args['suffix']
-suffix = suffix + '/'
+    suffix = suffix.rstrip('/') + '_' + args['suffix']
+suffix = suffix.rstrip('/') + '/'
 
 # Create path to images and model save
 path_images = config.path_save + suffix + 'Images/'
@@ -117,7 +121,23 @@ os.system('cp ../Utils/cfg.py {:s}'.format(path_models + '_cfg.py'))
 # train_images = train_images.to(config.DEVICE)
 
 # Torch Tensor version
-train_images, testset = cfg.load_training_data(config, index, loadtest=True)
+if args['data_file'] is not None:
+    import torchvision.transforms as transforms
+    train_raw = torch.load(os.path.expanduser(args['data_file']), weights_only=True)
+    test_raw = None
+    if args['data_test_file'] is not None:
+        test_raw = torch.load(os.path.expanduser(args['data_test_file']), weights_only=True)
+    # apply centering consistent with cfg.load_training_data
+    mean = torch.mean(train_raw, axis=[0, 2, 3])
+    std = torch.ones(config.IMG_SHAPE[0])
+    tfm = transforms.Compose([transforms.Normalize(mean, std)])
+    train_images = loader.TransformedDataset(train_raw, transform=tfm)
+    testset = loader.TransformedDataset(test_raw, transform=tfm) if test_raw is not None else None
+    config.mean = mean
+    config.std = std
+    print(f'Loaded custom data: train={train_raw.shape}, test={test_raw.shape if test_raw is not None else None}')
+else:
+    train_images, testset = cfg.load_training_data(config, index, loadtest=True)
 
 # In[]
 

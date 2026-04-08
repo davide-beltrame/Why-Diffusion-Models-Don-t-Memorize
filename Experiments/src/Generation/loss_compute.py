@@ -48,6 +48,16 @@ parser.add_argument(
 # eval controls
 parser.add_argument("--eval_N", type=int, default=10, help="Test images PER timestep")
 parser.add_argument("--eval_batch", type=int, default=100, help="Batch size for model forward (<= eval_N).")
+parser.add_argument("--split", type=str, choices=["train", "test", "both"], default="test",
+                    help="Which split to evaluate. Default keeps legacy behavior (test).")
+parser.add_argument("--subset_N", type=int, default=None,
+                    help="If set, evaluate exactly subset_N images from selected split(s).")
+parser.add_argument("--subset_seed", type=int, default=0,
+                    help="Seed for deterministic subset selection in each split.")
+parser.add_argument("--noise_seed_base", type=int, default=None,
+                    help="Base seed for forward-noise reproducibility. Defaults to --seed if omitted.")
+parser.add_argument("--checkpoint_grid", type=str, choices=["paper49", "cfg"], default="paper49",
+                    help="Checkpoint grid: paper49 matches sample-split scripts; cfg uses cfg.get_training_times().")
 parser.add_argument(
     "--t_base",
     type=int,
@@ -60,6 +70,12 @@ parser.add_argument(
 parser.add_argument("--out_dire", type=str, default=None, help="Override config.path_save (optional).")
 parser.add_argument("--xlog", action="store_true", help="Use log scale on x (checkpoints).")
 parser.add_argument("--ylog", action="store_true", help="Use log scale on y (loss).")
+parser.add_argument("--data-file", type=str, default=None,
+                    help="Override: path to a pre-split train .pt tensor.")
+parser.add_argument("--data-test-file", type=str, default=None,
+                    help="Override: path to a pre-split test .pt tensor.")
+parser.add_argument("--suffix", type=str, default=None,
+                    help="Custom suffix appended to model folder name (e.g., _PCA_L0).")
 
 args = parser.parse_args()
 print(args)
@@ -72,15 +88,18 @@ torch.backends.cudnn.deterministic = True
 # Helpers
 # =============================================================================
 
-def build_type_model(config, size, n_base, index: int, seed_run: int | None) -> str:
+def build_type_model(config, size, n_base, index: int, seed_run: int | None, suffix: str | None = None) -> str:
     if seed_run is None:
-        return "{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}/".format(
+        base = "{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}".format(
             config.DATASET, size, config.n_images, n_base, config.OPTIM, config.BATCH_SIZE, config.LR, index
         )
     else:
-        return "{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}_seed{:d}/".format(
+        base = "{:s}{:d}_{:d}_{:d}_{:s}_{:d}_{:.4f}_index{:d}_seed{:d}".format(
             config.DATASET, size, config.n_images, n_base, config.OPTIM, config.BATCH_SIZE, config.LR, index, seed_run
         )
+    if suffix:
+        base += "_" + suffix.lstrip("_")
+    return base + "/"
 
 
 def build_model(config, n_base: int, device: torch.device):
@@ -166,19 +185,44 @@ device = torch.device(config.DEVICE)
 if args.out_dire is not None:
     config.path_save = args.out_dire
 
-# Load test set once (large pool), then pick a fixed subset
-config.n_images = 40000
-_, bigb = cfg.load_training_data(config, 0, loadtest=True)
-X_test_all = bigb
+# Load train/test pools once, then pick fixed subsets
+if args.data_file is not None:
+    import torchvision.transforms as _tfms
+    _train_raw = torch.load(os.path.expanduser(args.data_file), weights_only=True)
+    _test_raw = torch.load(os.path.expanduser(args.data_test_file), weights_only=True) if args.data_test_file else None
+    _mean = torch.mean(_train_raw, axis=[0, 2, 3])
+    _std = torch.ones(config.IMG_SHAPE[0])
+    _tfm = _tfms.Compose([_tfms.Normalize(_mean, _std)])
+    big_train = torch.stack([_tfm(x) for x in _train_raw])
+    big_test = torch.stack([_tfm(x) for x in _test_raw]) if _test_raw is not None else torch.empty(0)
+    config.mean = _mean
+    config.std = _std
+    print(f'Loaded custom data: train={big_train.shape}, test={big_test.shape}')
+else:
+    config.n_images = 40000
+    big_train, big_test = cfg.load_training_data(config, 0, loadtest=True)
 
-N_total = len(X_test_all)
-N_eval = min(int(args.eval_N), N_total)
-if N_eval < int(args.eval_N):
-    print(f"[WARN] Requested eval_N={args.eval_N}, but testset has only {N_total}. Using N_eval={N_eval}.")
+def select_subset(X_all: torch.Tensor, want: int, seed: int) -> torch.Tensor:
+    n_total = len(X_all)
+    n_eval = min(int(want), n_total)
+    if n_eval < int(want):
+        print(f"[WARN] Requested {want}, but split has only {n_total}. Using {n_eval}.")
+    g_local = torch.Generator(device="cpu").manual_seed(seed)
+    idx_local = torch.randperm(n_total, generator=g_local)[:n_eval]
+    return X_all[idx_local].to(device)
 
-g = torch.Generator(device="cpu").manual_seed(args.seed)
-idx = torch.randperm(N_total, generator=g)[:N_eval]
-X0 = X_test_all[idx].to(device)
+
+if args.subset_N is not None:
+    n_req = int(args.subset_N)
+else:
+    n_req = int(args.eval_N)
+
+X_train_eval = None
+X_test_eval = None
+if args.split in ("train", "both"):
+    X_train_eval = select_subset(big_train, n_req, int(args.subset_seed))
+if args.split in ("test", "both"):
+    X_test_eval = select_subset(big_test, n_req, int(args.subset_seed) + 1)
 
 # diffusion config + timesteps
 df = Diffusion.DiffusionConfig(
@@ -193,13 +237,16 @@ assert int(t_values.min()) == 0
 assert int(t_values.max()) == df.n_steps - 1
 
 # training checkpoints
-training_times = np.linspace(10, 5000 - 1, 50, dtype=int)[1:]
+if args.checkpoint_grid == "paper49":
+    training_times = np.linspace(10, 5000 - 1, 50, dtype=int)[1:]
+else:
+    training_times = np.array(cfg.get_training_times(), dtype=int)
 print(f"Evaluating {len(training_times)} checkpoints.")
 
 # IMPORTANT: set n_images for the run folder name
 config.n_images = int(args.num)
 
-type_model = build_type_model(config, size, n_base, args.index, args.seed_run)
+type_model = build_type_model(config, size, n_base, args.index, args.seed_run, suffix=args.suffix)
 
 
 # =============================================================================
@@ -208,9 +255,14 @@ type_model = build_type_model(config, size, n_base, args.index, args.seed_run)
 model = build_model(config, n_base, device)
 model.eval()
 
-loss_means = []
-loss_sems = []
-counts = []
+if args.noise_seed_base is None:
+    noise_seed_base = int(args.seed)
+else:
+    noise_seed_base = int(args.noise_seed_base)
+
+split_to_means = {"train": [], "test": []}
+split_to_sems = {"train": [], "test": []}
+split_to_counts = {"train": [], "test": []}
 
 for ckpt in tqdm(training_times.tolist(), desc="Checkpoints", dynamic_ncols=True):
     ckpt_path = os.path.join(config.path_save, type_model, "Models", f"Model_epoch_{int(ckpt)}")
@@ -220,82 +272,116 @@ for ckpt in tqdm(training_times.tolist(), desc="Checkpoints", dynamic_ncols=True
     model = loader.load_model(model, ckpt_path)
     model.eval()
 
-    mean_loss, sem_loss, count = eval_checkpoint_loss_avg_over_timesteps(
-        model=model,
-        df=df,
-        config=config,
-        X0=X0,
-        t_values=t_values,
-        eval_batch=int(args.eval_batch),
-        seed_base=int(args.seed),
-    )
+    if args.split in ("train", "both"):
+        mean_loss, sem_loss, count = eval_checkpoint_loss_avg_over_timesteps(
+            model=model,
+            df=df,
+            config=config,
+            X0=X_train_eval,
+            t_values=t_values,
+            eval_batch=int(args.eval_batch),
+            seed_base=noise_seed_base,
+        )
+        split_to_means["train"].append(mean_loss)
+        split_to_sems["train"].append(sem_loss)
+        split_to_counts["train"].append(count)
 
-    loss_means.append(mean_loss)
-    loss_sems.append(sem_loss)
-    counts.append(count)
+    if args.split in ("test", "both"):
+        mean_loss, sem_loss, count = eval_checkpoint_loss_avg_over_timesteps(
+            model=model,
+            df=df,
+            config=config,
+            X0=X_test_eval,
+            t_values=t_values,
+            eval_batch=int(args.eval_batch),
+            seed_base=noise_seed_base,
+        )
+        split_to_means["test"].append(mean_loss)
+        split_to_sems["test"].append(sem_loss)
+        split_to_counts["test"].append(count)
 
-loss_means = np.array(loss_means, dtype=np.float64)
-loss_sems = np.array(loss_sems, dtype=np.float64)
-counts = np.array(counts, dtype=np.int64)
+for k in ("train", "test"):
+    split_to_means[k] = np.array(split_to_means[k], dtype=np.float64)
+    split_to_sems[k] = np.array(split_to_sems[k], dtype=np.float64)
+    split_to_counts[k] = np.array(split_to_counts[k], dtype=np.int64)
 
-# minimum
-min_idx = int(np.argmin(loss_means))
-min_checkpoint = int(training_times[min_idx])
-min_loss = float(loss_means[min_idx])
-min_sem = float(loss_sems[min_idx])
-
-print("\n=== Minimum test loss across checkpoints ===")
-print(f"min_loss = {min_loss:.6g} ± {min_sem:.6g} at checkpoint {min_checkpoint} (idx {min_idx})")
+if args.split in ("test", "both") and split_to_means["test"].size > 0:
+    min_idx = int(np.argmin(split_to_means["test"]))
+    min_checkpoint = int(training_times[min_idx])
+    min_loss = float(split_to_means["test"][min_idx])
+    min_sem = float(split_to_sems["test"][min_idx])
+    print("\n=== Minimum test loss across checkpoints ===")
+    print(f"min_loss = {min_loss:.6g} ± {min_sem:.6g} at checkpoint {min_checkpoint} (idx {min_idx})")
+else:
+    min_idx = -1
+    min_checkpoint = -1
+    min_loss = np.nan
+    min_sem = np.nan
 
 
 # =============================================================================
 # Save + plot
 # =============================================================================
-out_dir = os.path.join(config.path_save, "Losses_over_checkpoints")
+out_dir = os.path.join(config.path_save, "Losses_over_checkpoints_timing")
 os.makedirs(out_dir, exist_ok=True)
 
 tag = f"{config.DATASET}{size}_{config.n_images}_{n_base}_{config.OPTIM}_{config.BATCH_SIZE}_{config.LR:.4f}_index{args.index}"
 if args.seed_run is not None:
     tag += f"_seed{args.seed_run}"
+if args.suffix is not None:
+    tag += f"_{args.suffix.lstrip('_')}"
 
-npz_path = os.path.join(out_dir, f"test_mse_avg_over_timesteps_vs_checkpoint_{tag}.npz")
-png_path = os.path.join(out_dir, f"test_mse_avg_over_timesteps_vs_checkpoint_{tag}.png")
+npz_path = os.path.join(out_dir, f"timing_loss_avg_over_timesteps_vs_checkpoint_{tag}.npz")
+png_path = os.path.join(out_dir, f"timing_loss_avg_over_timesteps_vs_checkpoint_{tag}.png")
 
 np.savez(
     npz_path,
     training_times=np.array(training_times, dtype=np.int64),
-    loss_means=loss_means,
-    loss_sems=loss_sems,
-    counts=counts,
+    split=np.array(args.split),
+    train_loss_means=split_to_means["train"],
+    train_loss_sems=split_to_sems["train"],
+    train_counts=split_to_counts["train"],
+    test_loss_means=split_to_means["test"],
+    test_loss_sems=split_to_sems["test"],
+    test_counts=split_to_counts["test"],
     # minimum info
     min_idx=np.array(min_idx, dtype=np.int64),
     min_checkpoint=np.array(min_checkpoint, dtype=np.int64),
     min_loss=np.array(min_loss, dtype=np.float64),
     min_sem=np.array(min_sem, dtype=np.float64),
     # eval metadata
-    eval_N=np.array(N_eval, dtype=np.int64),
+    subset_N=np.array(n_req, dtype=np.int64),
     eval_batch=np.array(int(args.eval_batch), dtype=np.int64),
     t_base=np.array(int(args.t_base), dtype=np.int64),
+    checkpoint_grid=np.array(args.checkpoint_grid),
+    subset_seed=np.array(int(args.subset_seed), dtype=np.int64),
+    noise_seed_base=np.array(noise_seed_base, dtype=np.int64),
     n_timesteps=np.array(int(t_values.numel()), dtype=np.int64),
     # full args for reproducibility
     args_json=np.array(json.dumps(vars(args), sort_keys=True)),
 )
 
 plt.figure(figsize=(8.5, 4.8))
-plt.errorbar(training_times, loss_means, yerr=loss_sems, fmt="-o", capsize=2,
-             linewidth=1.4, markersize=3.5, markerfacecolor='white', markeredgewidth=0.9)
+if split_to_means["train"].size > 0:
+    plt.errorbar(training_times, split_to_means["train"], yerr=split_to_sems["train"], fmt="-o", capsize=2,
+                 linewidth=1.2, markersize=3.2, markerfacecolor='white', markeredgewidth=0.9, label="train")
+if split_to_means["test"].size > 0:
+    plt.errorbar(training_times, split_to_means["test"], yerr=split_to_sems["test"], fmt="-s", capsize=2,
+                 linewidth=1.2, markersize=3.2, markerfacecolor='white', markeredgewidth=0.9, label="test")
 
-# mark minimum
-plt.axvline(min_checkpoint, linestyle="--", linewidth=1.0)
-plt.scatter([min_checkpoint], [min_loss], zorder=5)
+if min_checkpoint >= 0:
+    plt.axvline(min_checkpoint, linestyle="--", linewidth=1.0)
+    plt.scatter([min_checkpoint], [min_loss], zorder=5)
 
 plt.grid(True, alpha=0.3)
 plt.xlabel("Training checkpoint")
-plt.ylabel("Test MSE (avg over all timesteps + samples)")
-plt.title(f"Test loss vs checkpoint\nmin={min_loss:.4g} @ {min_checkpoint}")
-
-# simple legend that explicitly reports the min checkpoint
-plt.legend([f"loss curve (min @ {min_checkpoint})"], frameon=False, loc="best")
+plt.ylabel("MSE (avg over all timesteps + samples)")
+if min_checkpoint >= 0:
+    plt.title(f"Loss vs checkpoint\nmin test={min_loss:.4g} @ {min_checkpoint}")
+else:
+    plt.title("Loss vs checkpoint")
+if split_to_means["train"].size > 0 or split_to_means["test"].size > 0:
+    plt.legend(frameon=False, loc="best")
 
 if args.xlog:
     plt.xscale("log")
