@@ -550,7 +550,7 @@ class GenerationCache:
 
         fpath = self._cache_path(folder, checkpoint_id)
         if fpath.exists():
-            x = torch.load(str(fpath), map_location="cpu")
+            x = torch.load(str(fpath), map_location="cpu", weights_only=True)
             if not torch.is_tensor(x):
                 raise RuntimeError(f"Cache file did not contain a tensor: {fpath}")
             self._mem[key] = x

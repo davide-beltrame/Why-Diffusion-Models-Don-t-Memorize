@@ -74,7 +74,7 @@ def compute_fid_for_checkpoint(tau, type_model, config, path_stats_testset,
             file_a = path + '/samples_a_{:d}'.format(i)
             
             # Load generated samples
-            images_a = torch.load(file_a)
+            images_a = torch.load(file_a, weights_only=True)
             
             # Detransform data to original scale
             t = detransform_images(images_a, config)

@@ -199,7 +199,7 @@ def load_CelebA_pt(config, full_tensor, loadtest=False, ntest=2048, index=0):
 #   Loading the model
 # ===================================================================
 def load_model(model: torch.nn.Module, path_checkpoint: str, verbose: bool = True):
-    state_dict = torch.load(path_checkpoint, map_location='cpu')
+    state_dict = torch.load(path_checkpoint, map_location='cpu', weights_only=True)
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith('module.'):
