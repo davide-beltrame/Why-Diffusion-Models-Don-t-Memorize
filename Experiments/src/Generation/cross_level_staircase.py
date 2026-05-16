@@ -171,6 +171,19 @@ def method_limits(level_curves: dict):
     return x_min, x_max, y_min, y_max
 
 
+def padded_limits(y_min: float, y_max: float):
+    pad = 0.04 * (y_max - y_min)
+    if pad <= 0.0:
+        pad = max(abs(y_min), 1.0) * 0.01
+    return y_min - pad, y_max + pad
+
+
+def times_tag(times):
+    if times is None:
+        return "tbase"
+    return "t" + "_".join(str(int(t)) for t in times)
+
+
 def build_curve_map(cross_dir: Path, methods, levels, times):
     all_data = {}
     for method in methods:
@@ -312,7 +325,7 @@ def save_single_method_figure(
     )
     x_min, x_max, y_min, y_max = method_limits(method_curves)
     ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+    ax.set_ylim(*padded_limits(y_min, y_max))
 
     h = legend_handles(levels=levels, times=times, overlay_losses=overlay_losses)
     fig.legend(handles=h, loc="lower center", ncol=min(6, max(2, len(h))))
@@ -341,6 +354,10 @@ def main():
     parser.add_argument("--out_dir", type=str, default=None,
                         help="Output directory for aggregate figure. Defaults to <saves_dir>/CrossLevel")
     parser.add_argument("--out_stem", type=str, default="cross_level_staircase")
+    parser.add_argument("--policy", type=str, default=None,
+                        help="Optional checkpoint-freeze policy label stored in metadata and titles.")
+    parser.add_argument("--tagged_alias", action="store_true",
+                        help="Also save files with metric/time/policy encoded in the output stem.")
     parser.add_argument("--title", type=str,
                         default="Cross-level staircase: L3 sweep against fixed Lk")
     parser.add_argument("--save_per_method", action="store_true",
@@ -408,37 +425,45 @@ def main():
             style_by_time=style_by_time,
         )
 
-        if i == 0:
-            x_min, x_max, y_min, y_max = method_limits(all_data[method])
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_min, y_max)
+        x_min, x_max, y_min, y_max = method_limits(all_data[method])
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(*padded_limits(y_min, y_max))
 
     h = legend_handles(levels=levels, times=times, overlay_losses=args.overlay_losses)
     fig.legend(handles=h, loc="lower center", ncol=min(6, max(2, len(h))))
     fig.suptitle(args.title, y=0.98)
     fig.tight_layout(rect=(0.0, 0.10, 1.0, 0.95))
 
-    for ext in ("png", "pdf"):
-        out_plot = out_dir / f"{args.out_stem}.{ext}"
-        fig.savefig(out_plot, bbox_inches="tight")
-        print(f"Saved plot: {out_plot}")
+    plot_stems = [args.out_stem]
+    if args.tagged_alias:
+        policy_tag = args.policy if args.policy is not None else "policy_unspecified"
+        tagged_stem = f"{args.out_stem}_{policy_tag}_{metric_used}_{times_tag(times)}"
+        if tagged_stem not in plot_stems:
+            plot_stems.append(tagged_stem)
+
+    for stem in plot_stems:
+        for ext in ("png", "pdf"):
+            out_plot = out_dir / f"{stem}.{ext}"
+            fig.savefig(out_plot, bbox_inches="tight")
+            print(f"Saved plot: {out_plot}")
     plt.close(fig)
 
     if args.save_per_method:
         for method in methods:
-            save_single_method_figure(
-                out_dir=out_dir,
-                out_stem=args.out_stem,
-                method=method,
-                method_curves=all_data[method],
-                xscale=args.xscale,
-                metric_label=y_label,
-                overlay_loss=loss_by_method[method],
-                style_by_time=style_by_time,
-                levels=levels,
-                times=times,
-                overlay_losses=args.overlay_losses,
-            )
+            for stem in plot_stems:
+                save_single_method_figure(
+                    out_dir=out_dir,
+                    out_stem=stem,
+                    method=method,
+                    method_curves=all_data[method],
+                    xscale=args.xscale,
+                    metric_label=y_label,
+                    overlay_loss=loss_by_method[method],
+                    style_by_time=style_by_time,
+                    levels=levels,
+                    times=times,
+                    overlay_losses=args.overlay_losses,
+                )
 
     save_dict = {
         "methods": np.array(methods, dtype=object),
@@ -447,7 +472,13 @@ def main():
         "metric": np.array(metric_used if metric_used is not None else args.metric),
         "xscale": np.array(args.xscale),
         "title": np.array(args.title),
-        "meta_json": np.array(json.dumps({"out_stem": args.out_stem, "overlay_losses": bool(args.overlay_losses)}, sort_keys=True)),
+        "policy": np.array("" if args.policy is None else args.policy),
+        "meta_json": np.array(json.dumps({
+            "out_stem": args.out_stem,
+            "plot_stems": plot_stems,
+            "overlay_losses": bool(args.overlay_losses),
+            "policy": args.policy,
+        }, sort_keys=True)),
     }
 
     for method in methods:
@@ -460,9 +491,10 @@ def main():
                 save_dict[f"{pfx}_means"] = d["means"]
                 save_dict[f"{pfx}_sems"] = d["sems"]
 
-    out_npz = out_dir / f"{args.out_stem}_data.npz"
-    np.savez(out_npz, **save_dict)
-    print(f"Saved data: {out_npz}")
+    for stem in plot_stems:
+        out_npz = out_dir / f"{stem}_data.npz"
+        np.savez(out_npz, **save_dict)
+        print(f"Saved data: {out_npz}")
 
 
 if __name__ == "__main__":
