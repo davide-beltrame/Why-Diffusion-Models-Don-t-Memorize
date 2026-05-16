@@ -375,6 +375,9 @@ for (j, checkpoint_id) in enumerate(training_times):
     # Plot (two y-axes)
     xs = training_times[:j + 1]
 
+    ax.set_xscale('linear')
+    ax.set_yscale('linear')
+    ax2.set_yscale('linear')
     ax.clear()
     ax2.clear()
 
@@ -413,9 +416,8 @@ for (j, checkpoint_id) in enumerate(training_times):
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax.legend(lines1 + lines2, labels1 + labels2, loc='best')
 
-    ax.set_yscale('log')
-    ax2.set_yscale('log')
     ax.set_xscale('log')
+    ax.set_xlim(max(float(xs[0]) * 0.9, 1e-6), float(xs[-1]) * 1.05)
 
     fig.tight_layout()
     fig.savefig(plot_path, bbox_inches='tight')
