@@ -165,7 +165,7 @@ def main():
 
         ax.set_title(panel_title)
         ax.set_xlabel("L3 checkpoint (swept model)")
-        ax.set_ylabel("Cosine similarity (score predictions)")
+        ax.set_ylabel("Cosine similarity (noise predictions)")
         ax.set_xscale("log")
         ax.grid(True, linestyle=":", alpha=0.35)
 
@@ -174,7 +174,7 @@ def main():
         legend_items.append(Line2D([0], [0], color=level_colors[lvl], lw=2.0, label=f"L3 vs L{lvl}"))
     legend_items.append(Line2D([0], [0], color="#333333", lw=2.0, linestyle="-", label=args.track_a_label))
     legend_items.append(Line2D([0], [0], color="#333333", lw=2.0, linestyle="--", label=args.track_b_label))
-    legend_items.append(Line2D([0], [0], color="#333333", marker="D", lw=0, markersize=6, label="frozen checkpoint"))
+    legend_items.append(Line2D([0], [0], color="#333333", marker="D", lw=0, markersize=6, label="within-level optimum"))
     if loss_curve is not None:
         legend_items.append(Line2D([0], [0], color="#222222", lw=1.3, linestyle=":", label="L3 test loss"))
 

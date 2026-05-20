@@ -173,14 +173,16 @@ if __name__ == '__main__':
     )
     
     # Resume training from last weights in the folder
-    weights_files = glob.glob(os.path.join(path_models + 'Model_' + '*'))
+    weights_files = glob.glob(os.path.join(path_models, 'Model_*'))
     if weights_files:   # If exist, use it
         offset = max([int(f.split('_')[-1]) for f in weights_files])
     else:               # If not, start from 0
         offset = 0
     
     if offset > 0:
-        path_checkpoint = config.path_save + '/{:s}/Models/Model_{:d}'.format(suffix, offset)
+        path_checkpoint = os.path.join(path_models, 'Model_epoch_{:d}'.format(offset))
+        if not os.path.exists(path_checkpoint):
+            path_checkpoint = os.path.join(path_models, 'Model_{:d}'.format(offset))
         model = loader.load_model(model, path_checkpoint)
         model.to(config.DEVICE)
     

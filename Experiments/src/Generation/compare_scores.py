@@ -35,6 +35,10 @@ parser.add_argument('--device', type=str, help='Device used to load and apply th
 parser.add_argument('--seed', type=int, default=0, help='Seed controlling x_init and reverse-process noise.')
 parser.add_argument('--seeds_run', help='Comma-separated list of seeds for multiple runs.', type=str, default=None)
 parser.add_argument('--out_dire', type=str, default=None)
+parser.add_argument('--model_root', type=str, default=None,
+                    help='Root containing trained model folders. Defaults to config.path_save.')
+parser.add_argument('--allow_missing_checkpoints', action='store_true',
+                    help='Filter the checkpoint grid to checkpoints present for all compared models.')
 parser.add_argument('--suffix', type=str, default=None,
                     help='Optional suffix appended to model folder names (e.g., PCA_L0).')
 
@@ -259,10 +263,27 @@ batch_gen = 512
 Ns = Nsamples // batch_gen
 training_times = np.linspace(10, 5000 - 1, 50, dtype=int)[1:]
 
-model_root = config.path_save
+model_root = args.model_root if args.model_root is not None else config.path_save
 out_root = args.out_dire if args.out_dire is not None else model_root
 out_dir = os.path.join(out_root, "Comparisons")
 os.makedirs(out_dir, exist_ok=True)
+
+if args.allow_missing_checkpoints:
+    available = []
+    for ckpt in training_times.tolist():
+        ok = True
+        for type_model_a, type_model_b, _, _ in type_models:
+            path_a = os.path.join(model_root, type_model_a, "Models", f"Model_epoch_{int(ckpt)}")
+            path_b = os.path.join(model_root, type_model_b, "Models", f"Model_epoch_{int(ckpt)}")
+            if not (os.path.exists(path_a) and os.path.exists(path_b)):
+                ok = False
+                break
+        if ok:
+            available.append(int(ckpt))
+    training_times = np.asarray(available, dtype=int)
+    if training_times.size == 0:
+        raise FileNotFoundError("No requested checkpoints are available for all compared models.")
+    print(f"Using {len(training_times)} available checkpoints after filtering missing files.")
 
 plot_path = os.path.join(
     out_dir,
@@ -296,8 +317,8 @@ for (j, checkpoint_id) in enumerate(training_times):
     for (k, ((type_model_a, type_model_b, index_a, index_b), (model_a, model_b, _, _))) in enumerate(zip(type_models, models)):
         print(f"  Comparing index {index_a} vs {index_b} ({k + 1}/{len(type_models)})")
 
-        path_a = model_root + type_model_a + 'Models' + model_suffix
-        path_b = model_root + type_model_b + 'Models' + model_suffix
+        path_a = os.path.join(model_root, type_model_a, "Models", f"Model_epoch_{checkpoint_id}")
+        path_b = os.path.join(model_root, type_model_b, "Models", f"Model_epoch_{checkpoint_id}")
 
         if not os.path.exists(path_a):
             raise NameError('The checkpoint does not exist: {:s}'.format(path_a))

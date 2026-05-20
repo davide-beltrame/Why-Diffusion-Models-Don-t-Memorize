@@ -54,11 +54,11 @@ All paths below are relative to `Experiments/`.
 
 | File | Paper figure | Description |
 |------|-------------|-------------|
-| `src/Generation/compare_scores.py` | Fig. 2 | Score-level sample-split analysis: computes cosine similarity between noise predictions from models trained on complementary data halves at fixed diffusion times |
+| `src/Generation/compare_scores.py` | Fig. 2 | Noise-prediction sample-split analysis: computes cosine similarity between predicted noises from models trained on complementary data halves at fixed diffusion times |
 | `src/Generation/sample_split_inference.py` | Fig. 1(a) right, App. Fig. 7 | Paired sample generation from two models (same/different data) with nearest-neighbor retrieval and visualization |
 | `src/Generation/loss_compute.py` | Fig. 1(a) left | Per-checkpoint test loss (DSM) curves across training |
 | `src/Generation/cos_dis_aggregate.py` | Fig. 1(a) left | Aggregates per-pair cosine similarity and per-model test loss into the dual-axis plot |
-| `src/Training/run_train.sh` | — | End-to-end pipeline: preprocesses CelebA (if needed), trains U-Nets on complementary halves, then runs the full evaluation suite (score comparison, loss curves, paired generation, aggregation) |
+| `src/Training/run_train.sh` | — | End-to-end pipeline: preprocesses CelebA (if needed), trains U-Nets on complementary halves, then runs the full evaluation suite (noise-prediction comparison, loss curves, paired generation, aggregation) |
 | `src/Utils/preprocess_celeba.py` | — | Preprocesses raw CelebA images into a single tensor file for efficient training |
 
 
@@ -101,7 +101,7 @@ Alternatively, each step can be run individually:
                            -t -1 --index $i -se $i
     done
 
-    # score-level sample-split cosine similarity (Fig. 2)
+    # noise-prediction sample-split cosine similarity (Fig. 2)
     cd ../Generation
     for t in 50 100 150 200; do
         python compare_scores.py -n 1024 -is 0 -ie 14 -s 32 -LR 0.0001 \
@@ -120,4 +120,62 @@ Alternatively, each step can be run individually:
 
     # aggregate cosine similarity + loss into dual-axis plot (Fig. 1a left)
     python cos_dis_aggregate.py --saves_dir ../../Saves_new -n 1024
+```
+
+## CelebA multiscale filtering appendix
+
+The PCA/Haar-wavelet filtering diagnostic reuses the same CelebA U-Net
+architecture and compares predicted noises across progressively richer filtered
+versions of the data. A clean reproduction should use a fresh output root, for
+example `Experiments/Saves_new/CelebAMultiscale_<date>/`, and keep generated
+`.npz`, `.csv`, `.png`, and `.pdf` files under that root.
+
+High-level recipe:
+
+```bash
+    # 1. Build filtered CelebA tensors from the preprocessed CelebA tensor.
+    cd Experiments/src/Utils
+    python filter_celeba.py --input-path ../../Data/CelebA/CelebA32.pt \
+                            --output-dir ../../Data/CelebA_filtered \
+                            --n-train 1024 --n-test 2048
+
+    # 2. Train split-indexed filtered models with run_Unet.py, using --data-file
+    #    and a suffix such as Wavelet_L2 or PCA_L3.
+    cd ../Training
+    python run_Unet.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 \
+                       -t -1 --index 0 -se 0 --steps 3500 --save-every 200 \
+                       --data-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_index0.pt \
+                       --suffix Wavelet_L2
+
+    # 3. Evaluate within-level loss and sample-split noise-prediction similarity.
+    cd ../Generation
+    python loss_compute.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 -B 512 \
+                           --suffix Wavelet_L2 \
+                           --model_root ../../Saves_new \
+                           --out_dire ../../Saves_new/<fresh_root>/Losses_over_checkpoints_timing \
+                           --data-test-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_test.pt \
+                           --allow_missing_checkpoints
+    python compare_scores.py -n 1024 -is 0 -ie 1 -s 32 -LR 0.0001 -O Adam -W 32 -B 512 \
+                             --suffix Wavelet_L2 \
+                             --data-file-0 ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_index0.pt \
+                             --data-file-1 ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_index1.pt \
+                             --data-test-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_test.pt \
+                             --out_dire ../../Saves_new/<fresh_root>/WithinLevel/Wavelet_L2 \
+                             --allow_missing_checkpoints -t 100 -Ns 512
+
+    # 4. Select within-level optima, sweep L3 against frozen L0/L1/L2 models,
+    #    and generate the combined Wavelet/PCA plot.
+    python select_freeze_checkpoint.py --policy max_similarity \
+                                       --comparisons-dir ../../Saves_new/<fresh_root>/WithinLevel/Wavelet_L2
+    python compare_scores_cross.py --model-a-dir ../../Saves_new/<L3_model_dir> \
+                                   --model-b-dir ../../Saves_new/<Lk_model_dir> \
+                                   --ckpt-b <within_level_optimum> \
+                                   --data-test-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L3_test.pt \
+                                   --times 100,200,400 \
+                                   --out-dir ../../Saves_new/<fresh_root>/CrossLevel/Wavelet_index0 \
+                                   --label L3_vs_L2
+    python celeba_multiscale_complexity_plot.py \
+        --result-root ../../Saves_new/<fresh_root> \
+        --methods Wavelet,PCA --levels 0,1,2 --time 100 \
+        --out-stem celeba_wavelet_pca_complexity
 ```

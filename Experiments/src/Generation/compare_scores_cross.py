@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Cross-level score comparison for the CelebA complexity experiment.
+"""Cross-level noise-prediction comparison for the CelebA complexity experiment.
 
 Fixes model B at a single checkpoint and sweeps model A over all its
-checkpoints, computing cosine similarity between their score predictions
+checkpoints, computing cosine similarity between their predicted noises
 on a shared test set. Used to build the "staircase" plot.
 
 Usage:
@@ -35,7 +35,7 @@ import Unet
 import cfg
 import loader
 
-parser = argparse.ArgumentParser("Cross-level score cosine similarity.")
+parser = argparse.ArgumentParser("Cross-level predicted-noise cosine similarity.")
 parser.add_argument("--model-a-dir", type=str, required=True,
                     help="Saves_new subfolder for model A (the one swept over checkpoints).")
 parser.add_argument("--model-b-dir", type=str, required=True,
@@ -45,7 +45,7 @@ parser.add_argument("--ckpt-b", type=int, required=True,
 parser.add_argument("-s", "--img_size", type=int, default=32)
 parser.add_argument("-W", "--nbase", type=int, default=32)
 parser.add_argument("-t", "--time", type=int, default=100,
-                    help="Diffusion timestep for score evaluation.")
+                    help="Diffusion timestep for noise-prediction evaluation.")
 parser.add_argument("--times", type=str, default=None,
                     help="Optional comma-separated timesteps (e.g. '100,200,400'). Overrides --time.")
 parser.add_argument("-Ns", "--Nsamples", type=int, default=512)
@@ -109,7 +109,6 @@ df = Diffusion.DiffusionConfig(
     device=config.DEVICE,
 )
 selected_times = parse_times(args, config.TIMESTEPS)
-is_multi_time = len(selected_times) > 1
 
 def build_model():
     m = Unet.UNet(
@@ -129,7 +128,7 @@ ckpt_files = [f for f in os.listdir(models_dir_a) if f.startswith("Model_epoch_"
 ckpt_ids = sorted([int(f.split("_")[-1]) for f in ckpt_files])
 print(f"Found {len(ckpt_ids)} checkpoints for model A")
 
-# Load model B (frozen checkpoint)
+# Load model B at the fixed within-level optimum.
 model_b = build_model()
 path_b = os.path.join(args.model_b_dir, "Models", f"Model_epoch_{args.ckpt_b}")
 if not os.path.exists(path_b):
@@ -147,7 +146,7 @@ def run_one_time(t_eval: int):
     ts = selected_time.repeat(test_data.shape[0])
     X_t, _, _ = Diffusion.forward_diffusion(df, test_data, ts, config, return_std=True)
 
-    # Precompute model B scores
+    # Precompute model B noise predictions.
     batch_gen = 512
     Ns = max(1, Nsamples // batch_gen)
     with torch.no_grad():
@@ -198,7 +197,7 @@ def run_one_time(t_eval: int):
 
     # Save
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = f"{args.label}_t{t_eval}" if is_multi_time else args.label
+    tag = f"{args.label}_t{t_eval}"
     npz_path = os.path.join(args.out_dir, f"cross_scores_{tag}.npz")
     np.savez(
         npz_path,
@@ -246,7 +245,7 @@ def run_one_time(t_eval: int):
         color="#d62728",
     )
     ax2.set_xlabel("Model A checkpoint")
-    ax2.set_ylabel("MSE of score predictions")
+    ax2.set_ylabel("MSE of noise predictions")
     ax2.grid(True, alpha=0.3)
 
     fig.suptitle(f"Cross-level @ t={t_eval}: A sweep vs B@{args.ckpt_b}")

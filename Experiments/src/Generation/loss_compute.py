@@ -58,6 +58,8 @@ parser.add_argument("--noise_seed_base", type=int, default=None,
                     help="Base seed for forward-noise reproducibility. Defaults to --seed if omitted.")
 parser.add_argument("--checkpoint_grid", type=str, choices=["paper49", "cfg"], default="paper49",
                     help="Checkpoint grid: paper49 matches sample-split scripts; cfg uses cfg.get_training_times().")
+parser.add_argument("--allow_missing_checkpoints", action="store_true",
+                    help="Filter the checkpoint grid to checkpoint files present on disk.")
 parser.add_argument(
     "--t_base",
     type=int,
@@ -67,7 +69,10 @@ parser.add_argument(
 )
 
 # outputs
-parser.add_argument("--out_dire", type=str, default=None, help="Override config.path_save (optional).")
+parser.add_argument("--out_dire", type=str, default=None,
+                    help="Output root for loss files. Model checkpoints are read from --model_root.")
+parser.add_argument("--model_root", type=str, default=None,
+                    help="Root containing trained model folders. Defaults to config.path_save.")
 parser.add_argument("--xlog", action="store_true", help="Use log scale on x (checkpoints).")
 parser.add_argument("--ylog", action="store_true", help="Use log scale on y (loss).")
 parser.add_argument("--data-file", type=str, default=None,
@@ -182,8 +187,8 @@ n_base = int(args.nbase)
 size = int(args.img_size)
 device = torch.device(config.DEVICE)
 
-if args.out_dire is not None:
-    config.path_save = args.out_dire
+model_root = args.model_root if args.model_root is not None else config.path_save
+out_root = args.out_dire if args.out_dire is not None else config.path_save
 
 # Load train/test pools once, then pick fixed subsets
 if args.data_file is not None:
@@ -248,6 +253,18 @@ config.n_images = int(args.num)
 
 type_model = build_type_model(config, size, n_base, args.index, args.seed_run, suffix=args.suffix)
 
+if args.allow_missing_checkpoints:
+    model_dir = os.path.join(model_root, type_model, "Models")
+    available = []
+    for ckpt in training_times.tolist():
+        ckpt_path = os.path.join(model_dir, f"Model_epoch_{int(ckpt)}")
+        if os.path.exists(ckpt_path):
+            available.append(int(ckpt))
+    training_times = np.asarray(available, dtype=int)
+    if training_times.size == 0:
+        raise FileNotFoundError(f"No requested checkpoints found in {model_dir}")
+    print(f"Using {len(training_times)} available checkpoints after filtering missing files.")
+
 
 # =============================================================================
 # Evaluate all checkpoints
@@ -265,7 +282,7 @@ split_to_sems = {"train": [], "test": []}
 split_to_counts = {"train": [], "test": []}
 
 for ckpt in tqdm(training_times.tolist(), desc="Checkpoints", dynamic_ncols=True):
-    ckpt_path = os.path.join(config.path_save, type_model, "Models", f"Model_epoch_{int(ckpt)}")
+    ckpt_path = os.path.join(model_root, type_model, "Models", f"Model_epoch_{int(ckpt)}")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
@@ -322,7 +339,7 @@ else:
 # =============================================================================
 # Save + plot
 # =============================================================================
-out_dir = os.path.join(config.path_save, "Losses_over_checkpoints_timing")
+out_dir = os.path.join(out_root, "Losses_over_checkpoints_timing")
 os.makedirs(out_dir, exist_ok=True)
 
 tag = f"{config.DATASET}{size}_{config.n_images}_{n_base}_{config.OPTIM}_{config.BATCH_SIZE}_{config.LR:.4f}_index{args.index}"

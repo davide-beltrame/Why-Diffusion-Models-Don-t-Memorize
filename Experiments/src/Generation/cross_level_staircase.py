@@ -192,6 +192,14 @@ def build_curve_map(cross_dir: Path, methods, levels, times):
             time_map = {}
             if times is None:
                 fp = cross_dir / method / f"cross_scores_L3_vs_L{level}.npz"
+                if not fp.exists():
+                    tagged = sorted((cross_dir / method).glob(f"cross_scores_L3_vs_L{level}_t*.npz"))
+                    if len(tagged) == 1:
+                        fp = tagged[0]
+                    elif len(tagged) > 1:
+                        raise ValueError(
+                            f"Multiple tagged time files found for {method} L{level}; pass --times explicitly."
+                        )
                 time_map[None] = fp
             else:
                 for t in times:
@@ -292,7 +300,7 @@ def legend_handles(levels, times, overlay_losses):
         for i, t in enumerate(times):
             out.append(Line2D([0], [0], color="#666666", lw=2.0, linestyle=style_cycle[i % len(style_cycle)], label=f"t={t}"))
 
-    out.append(Line2D([0], [0], color="#333333", marker="D", lw=0, markersize=6, label="frozen checkpoint"))
+    out.append(Line2D([0], [0], color="#333333", marker="D", lw=0, markersize=6, label="within-level optimum"))
 
     if overlay_losses:
         out.append(Line2D([0], [0], color="#222222", lw=1.5, linestyle="--", label="L3 test loss"))
@@ -398,9 +406,9 @@ def main():
         all_data[method] = method_map
 
     if metric_used == "mse":
-        y_label = "MSE of score predictions"
+        y_label = "MSE of noise predictions"
     else:
-        y_label = "Cosine similarity (score predictions)"
+        y_label = "Cosine similarity (noise predictions)"
 
     loss_dir = Path(os.path.expanduser(args.loss_dir)) if args.loss_dir else saves_dir / "Losses_over_checkpoints_timing"
     loss_by_method = {}
