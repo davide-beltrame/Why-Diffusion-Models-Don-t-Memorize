@@ -25,6 +25,7 @@ matplotlib>=3.7.0
 
 # Image processing
 Pillow>=9.0.0
+PyWavelets>=1.4.0
 
 # Progress bars
 tqdm>=4.65.0

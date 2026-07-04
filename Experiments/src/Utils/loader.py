@@ -21,8 +21,12 @@ class CelebADataset(Dataset):
       root_dir (string): Directory with all the images
       transform (callable, optional): transform to be applied to each image sample
     """
-    # Get image names
-    image_names = os.listdir(root_dir)
+    # Get image names - filter only valid image extensions
+    valid_extensions = {'.jpg', '.jpeg', '.png'}
+    image_names = [
+        f for f in os.listdir(root_dir)
+        if os.path.splitext(f)[1].lower() in valid_extensions
+    ]
 
     self.root_dir = root_dir
     self.transform = transform 
@@ -195,7 +199,7 @@ def load_CelebA_pt(config, full_tensor, loadtest=False, ntest=2048, index=0):
 #   Loading the model
 # ===================================================================
 def load_model(model: torch.nn.Module, path_checkpoint: str, verbose: bool = True):
-    state_dict = torch.load(path_checkpoint, map_location='cpu')
+    state_dict = torch.load(path_checkpoint, map_location='cpu', weights_only=True)
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith('module.'):
