@@ -20,7 +20,8 @@ from matplotlib.lines import Line2D
 import numpy as np
 
 
-COLORS = {0: "#d62728", 1: "#1f77b4", 2: "#9467bd"}
+COLORS = {0: "#CC79A7", 1: "#0072B2", 2: "#009E73"}
+LOSS_COLOR = "red"
 LABELS = {0: "L3 vs L0", 1: "L3 vs L1", 2: "L3 vs L2"}
 
 
@@ -166,56 +167,136 @@ def inspect_data(data, levels):
 
 def plot(data, methods, levels, out_dir: Path, out_stem: str, title: str | None):
     plt.rcParams.update({
+        "text.usetex": True,
+        "text.latex.preamble": r"\usepackage{amsfonts}",
         "figure.dpi": 140,
-        "savefig.dpi": 220,
-        "font.size": 10,
-        "axes.labelsize": 11,
+        "savefig.dpi": 300,
+        "font.size": 12,
+        "axes.labelsize": 12,
         "axes.titlesize": 12,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 10.5,
         "legend.frameon": False,
     })
 
-    fig, axes = plt.subplots(1, len(methods), figsize=(7.2 * len(methods), 4.8), sharey=False)
+    fig, axes = plt.subplots(1, len(methods), figsize=(9.6, 4.2), sharey=True)
     if len(methods) == 1:
         axes = [axes]
 
-    for ax, method in zip(axes, methods):
-        y_min, y_max = np.inf, -np.inf
+    all_vals = []
+    all_loss_vals = []
+    x_min, x_max = np.inf, -np.inf
+    for method in methods:
         for level in levels:
             curve = data[method]["levels"][level]
             ckpt = curve["checkpoints"]
             mean = curve["mean"]
             sem = curve["sem"]
-            y_min = min(y_min, float(np.min(mean - sem)))
-            y_max = max(y_max, float(np.max(mean + sem)))
-            ax.plot(ckpt, mean, color=COLORS[level], lw=2.0, label=LABELS[level])
-            ax.fill_between(ckpt, mean - sem, mean + sem, color=COLORS[level], alpha=0.09)
-            if curve["ckpt_b"] in set(ckpt.tolist()):
-                i = int(np.where(ckpt == curve["ckpt_b"])[0][0])
-                ax.scatter([ckpt[i]], [mean[i]], color=COLORS[level], marker="D", s=34, zorder=4)
-                ax.axvline(ckpt[i], color=COLORS[level], ls=":", lw=0.9, alpha=0.5)
+            all_vals.append(mean - sem)
+            all_vals.append(mean + sem)
+            x_min = min(x_min, float(np.min(ckpt)))
+            x_max = max(x_max, float(np.max(ckpt)))
+        loss = data[method]["loss"]
+        if loss is not None:
+            all_loss_vals.append(loss["mean"])
+
+    y_all = np.concatenate(all_vals)
+    y_pad = 0.04 * max(float(np.max(y_all) - np.min(y_all)), 1e-6)
+    y_lim = (max(0.0, float(np.min(y_all) - y_pad)), min(1.005, float(np.max(y_all) + y_pad)))
+    if all_loss_vals:
+        loss_all = np.concatenate(all_loss_vals)
+        loss_pad = 0.06 * max(float(np.max(loss_all) - np.min(loss_all)), 1e-6)
+        loss_lim = (float(np.min(loss_all) - loss_pad), float(np.max(loss_all) + loss_pad))
+    else:
+        loss_lim = None
+
+    for ax_i, (ax, method) in enumerate(zip(axes, methods)):
+        for level in levels:
+            curve = data[method]["levels"][level]
+            ckpt = curve["checkpoints"]
+            mean = curve["mean"]
+            sem = curve["sem"]
+            color = COLORS[level]
+            ax.plot(
+                ckpt,
+                mean,
+                marker="o",
+                markersize=3,
+                markerfacecolor=color,
+                color=color,
+                linewidth=2,
+                alpha=0.92,
+                label=LABELS[level],
+                zorder=3,
+            )
+            if np.any(sem > 0):
+                ax.fill_between(ckpt, mean - sem, mean + sem, alpha=0.14, color=color, linewidth=0, zorder=1)
+
+            nearest = int(np.argmin(np.abs(ckpt - curve["ckpt_b"])))
+            ax.scatter(
+                [ckpt[nearest]],
+                [mean[nearest]],
+                marker="D",
+                s=24,
+                color=color,
+                edgecolor="black",
+                linewidth=0.45,
+                zorder=8,
+            )
 
         loss = data[method]["loss"]
         if loss is not None:
             ax2 = ax.twinx()
-            ax2.plot(loss["checkpoints"], loss["mean"], color="#333333", ls="--", lw=1.4, alpha=0.75)
-            ax2.set_ylabel("L3 test loss (MSE)", color="#333333")
-            ax2.tick_params(axis="y", labelcolor="#333333")
+            ax2.plot(
+                loss["checkpoints"],
+                loss["mean"],
+                marker="d",
+                markersize=3,
+                markerfacecolor=LOSS_COLOR,
+                color=LOSS_COLOR,
+                linestyle="--",
+                linewidth=2,
+                alpha=0.9,
+                zorder=2,
+            )
+            if loss_lim is not None:
+                ax2.set_ylim(loss_lim)
+            if ax_i == len(methods) - 1:
+                ax2.set_ylabel("DSM test loss", color=LOSS_COLOR)
+                ax2.tick_params(axis="y", labelcolor=LOSS_COLOR, which="both")
+            else:
+                ax2.tick_params(axis="y", right=False, labelright=False)
+                ax2.spines["right"].set_visible(False)
 
-        pad = 0.06 * max(y_max - y_min, 1e-6)
-        ax.set_ylim(y_min - pad, y_max + pad)
         ax.set_xscale("log")
-        ax.set_xlabel("L3 checkpoint (swept model)")
-        ax.set_ylabel("Cosine similarity (noise predictions)")
-        ax.set_title("Haar wavelet" if method == "Wavelet" else "PCA control")
-        ax.grid(True, ls=":", alpha=0.35)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_lim)
+        ax.set_xlabel("L3 checkpoint")
+        if ax_i == 0:
+            ax.set_ylabel("Cosine similarity (noise predictions)")
+        ax.set_title("Haar wavelet" if method == "Wavelet" else "PCA")
 
-    handles = [Line2D([0], [0], color=COLORS[level], lw=2, label=LABELS[level]) for level in levels]
-    handles.append(Line2D([0], [0], color="#333333", ls="--", lw=1.4, label="L3 test loss"))
-    handles.append(Line2D([0], [0], color="#333333", marker="D", lw=0, markersize=6, label="within-level optimum"))
-    fig.legend(handles=handles, loc="lower center", ncol=min(5, len(handles)))
+    handles = [
+        Line2D([0], [0], color=COLORS[level], marker="o", lw=2, markersize=3, label=LABELS[level])
+        for level in levels
+    ]
+    handles.append(Line2D([0], [0], color=LOSS_COLOR, marker="d", ls="--", lw=2, markersize=3, label="L3 test loss"))
+    handles.append(Line2D([0], [0], color="black", marker="D", lw=0, markersize=5, label="selected Lk checkpoint"))
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=min(5, len(handles)),
+        bbox_to_anchor=(0.5, 0.025),
+        handletextpad=0.5,
+        borderaxespad=0.0,
+        handlelength=1.4,
+        columnspacing=0.9,
+        frameon=False,
+    )
     if title:
         fig.suptitle(title, y=0.98)
-    fig.tight_layout(rect=(0.0, 0.12, 1.0, 0.95 if title else 1.0))
+    fig.tight_layout(rect=(0.0, 0.095, 1.0, 0.94 if title else 1.0))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -289,7 +370,7 @@ def save_tables(data, report, methods, levels, out_dir: Path, out_stem: str, arg
 def main():
     parser = argparse.ArgumentParser("Create the CelebA multiscale complexity figure.")
     parser.add_argument("--result-root", type=str, required=True)
-    parser.add_argument("--methods", type=str, default="Wavelet,PCA")
+    parser.add_argument("--methods", type=str, default="PCA,Wavelet")
     parser.add_argument("--levels", type=str, default="0,1,2")
     parser.add_argument("--time", type=int, default=100)
     parser.add_argument("--out-dir", type=str, default=None)

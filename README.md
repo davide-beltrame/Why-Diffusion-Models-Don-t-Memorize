@@ -2,7 +2,7 @@
 
 This repository contains code for the theoretical analysis and numerical experiments for the paper [Why Diffusion Models Don't Memorize: The Role of Implicit Dynamical Regularization in Training](https://arxiv.org/abs/2505.17638) by T. Bonnaire, R. Urfin, G. Biroli and M. Mézard.
 
-This fork is a submodule in the `biased-generalization` repository, which contains the code for the numerical experiments in the paper [Biased Generalization in Diffusion Models](https://arxiv.org/abs/2602.-----) by J. Garnier-Brun, L. Biggio, D. Beltrame, M. Mézard, and L. Saglietti. Changes are detailed in the "Changes" section below.
+This fork is a submodule in the `biased-generalization` repository, which contains the code for the numerical experiments in the ICML 2026 Spotlight paper [Biased Generalization in Diffusion Models](https://arxiv.org/abs/2603.03469) by J. Garnier-Brun, L. Biggio, D. Beltrame, M. Mézard, and L. Saglietti. Changes are detailed in the "Changes" section below.
 
 ## Repository Structure
 
@@ -142,8 +142,10 @@ High-level recipe:
     # 2. Train split-indexed filtered models with run_Unet.py, using --data-file
     #    and a suffix such as Wavelet_L2 or PCA_L3.
     cd ../Training
+    # n=1024 and batch size 512 give two optimizer steps per epoch, so
+    # 7,000 steps reproduce the 3,500-epoch appendix training horizon.
     python run_Unet.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 \
-                       -t -1 --index 0 -se 0 --steps 3500 --save-every 200 \
+                       -t -1 -se 0 --steps 7000 \
                        --data-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_index0.pt \
                        --suffix Wavelet_L2
 
@@ -176,6 +178,6 @@ High-level recipe:
                                    --label L3_vs_L2
     python celeba_multiscale_complexity_plot.py \
         --result-root ../../Saves_new/<fresh_root> \
-        --methods Wavelet,PCA --levels 0,1,2 --time 100 \
+        --methods PCA,Wavelet --levels 0,1,2 --time 100 \
         --out-stem celeba_wavelet_pca_complexity
 ```
