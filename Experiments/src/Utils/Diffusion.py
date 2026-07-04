@@ -462,8 +462,7 @@ def train(model, trainloader, optimizer, config, df, loss_fn,
             break
     bar.close()
             
-    # Return nothing
-    return
+    return n_steps
 
 
 def train_one_batch_coupling(X, X2, model, model2, optimizer, optimizer2, loss_fn, 

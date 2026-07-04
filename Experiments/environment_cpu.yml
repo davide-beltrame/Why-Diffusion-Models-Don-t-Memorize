@@ -1,32 +1,21 @@
 name: memorization
 channels:
-  - conda-forge
   - pytorch
+  - conda-forge
   - defaults
 dependencies:
-  # Python
   - python=3.10
-  
-  # Core scientific computing
+  - pytorch::pytorch=2.5.1
+  - pytorch::torchvision=0.20.1
+  - pytorch::cpuonly
   - numpy
   - scipy
-  
-  # Plotting and visualization
   - matplotlib
-  
-  # Image processing
   - pillow
-  
-  # Progress bars
+  - pywavelets
   - tqdm
-  
-  # Natural sorting
   - natsort
-  
-  # Pip (for any additional packages)
+  - pytest
   - pip
-
-  # PyTorch (CPU-only version)
-  - pytorch
-  - torchvision
-  - cpuonly
+  - pip:
+      - pytorch-fid==0.3.0

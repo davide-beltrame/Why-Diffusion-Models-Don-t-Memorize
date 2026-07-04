@@ -3,8 +3,8 @@
 
 # PyTorch - Choose ONE of the following based on your system:
 # For CUDA 11.8:
-torch>=2.0.0
-torchvision>=0.15.0
+torch==2.5.1
+torchvision==0.20.1
 
 # For CUDA 12.1, use:
 # torch>=2.0.0+cu121

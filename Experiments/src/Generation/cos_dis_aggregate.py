@@ -4,7 +4,7 @@ into a single NPZ and produce the dual-axis Fig 1(a) left panel plot.
 
 Inputs (produced by sample_split_inference.py and loss_compute.py):
   - Comparisons_Mallat_final_{n}_seed_{seed}/cosine_similarity_metric_{metric}_index*_vs_*.npz
-  - Losses_over_checkpoints/test_mse_avg_over_timesteps_vs_checkpoint_*_index*.npz
+  - Losses_over_checkpoints_timing/timing_loss_avg_over_timesteps_vs_checkpoint_*_index*.npz
 
 Outputs:
   - {out_dir}/cosine_and_loss_data.npz
@@ -75,10 +75,16 @@ n_pairs = cosine_sims.shape[0]
 print(f"Loaded {n_pairs} cosine similarity curves, {len(cos_epochs)} checkpoints.")
 
 # ── 2. load test loss curves (one NPZ per model) ─────────────────────────────
-loss_dir = os.path.join(saves_dir, "Losses_over_checkpoints")
+loss_dir = os.path.join(saves_dir, "Losses_over_checkpoints_timing")
 loss_files = sorted(glob.glob(
-    os.path.join(loss_dir, "test_mse_avg_over_timesteps_vs_checkpoint_*_index*.npz")
+    os.path.join(loss_dir, "timing_loss_avg_over_timesteps_vs_checkpoint_*_index*.npz")
 ))
+if not loss_files:
+    # Backward compatibility with pre-rebuttal result bundles.
+    loss_dir = os.path.join(saves_dir, "Losses_over_checkpoints")
+    loss_files = sorted(glob.glob(
+        os.path.join(loss_dir, "test_mse_avg_over_timesteps_vs_checkpoint_*_index*.npz")
+    ))
 assert len(loss_files) > 0, f"No loss NPZ files in {loss_dir}"
 
 loss_means_list = []
@@ -90,7 +96,10 @@ for f in loss_files:
     else:
         assert np.array_equal(loss_epochs, d["training_times"]), \
             f"Epochs mismatch in {f}"
-    loss_means_list.append(d["loss_means"])
+    if "test_loss_means" in d:
+        loss_means_list.append(d["test_loss_means"])
+    else:
+        loss_means_list.append(d["loss_means"])
 
 test_losses_full = np.stack(loss_means_list, axis=0)  # (n_models, n_loss_epochs)
 n_models = test_losses_full.shape[0]
@@ -149,7 +158,7 @@ color_loss = "#d62728"
 
 # faint individual pair traces
 for i in range(n_pairs):
-    ax1.plot(epochs, 1 - cosine_sims[i], alpha=2 / n_pairs,
+    ax1.plot(epochs, 1 - cosine_sims[i], alpha=min(1.0, 2 / n_pairs),
              linewidth=0.8, color=color_cos, zorder=1)
 
 # median cosine distance ± SEM
