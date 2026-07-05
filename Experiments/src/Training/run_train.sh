@@ -28,7 +28,11 @@ OPTIM="${OPTIM:-Adam}"
 NBASE="${NBASE:-32}"
 BATCH="${BATCH:-512}"
 EVAL_N="${EVAL_N:-50}"
-NS="${NS:-1000}"
+SCORE_NS="${SCORE_NS:-${NS:-1000}}"
+SAMPLE_NS="${SAMPLE_NS:-${NS:-2000}}"
+EPOCHS="${EPOCHS:-5000}"
+STEPS="${STEPS:-}"
+SAVE_ROOT="${SAVE_ROOT:-}"
 
 # Simple flag parser
 while [[ $# -gt 0 ]]; do
@@ -39,6 +43,14 @@ while [[ $# -gt 0 ]]; do
         --lr)     LR="$2"; shift 2 ;;
         --optim)  OPTIM="$2"; shift 2 ;;
         --nbase)  NBASE="$2"; shift 2 ;;
+        --batch)  BATCH="$2"; shift 2 ;;
+        --eval-n) EVAL_N="$2"; shift 2 ;;
+        --samples) SCORE_NS="$2"; SAMPLE_NS="$2"; shift 2 ;;
+        --score-samples) SCORE_NS="$2"; shift 2 ;;
+        --sample-samples) SAMPLE_NS="$2"; shift 2 ;;
+        --epochs) EPOCHS="$2"; STEPS=""; shift 2 ;;
+        --steps)  STEPS="$2"; shift 2 ;;
+        --save-root) SAVE_ROOT="$2"; shift 2 ;;
         *)        echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -54,6 +66,14 @@ TRAIN_DIR="$EXP_ROOT/src/Training"
 GEN_DIR="$EXP_ROOT/src/Generation"
 UTILS_DIR="$EXP_ROOT/src/Utils"
 DATA_DIR="$EXP_ROOT/Data/CelebA"
+SAVE_ROOT="${SAVE_ROOT:-$EXP_ROOT/Saves_new}"
+mkdir -p "$SAVE_ROOT"
+
+if [[ -n "$STEPS" ]]; then
+    DURATION_ARGS=(--steps "$STEPS")
+else
+    DURATION_ARGS=(--epochs "$EPOCHS")
+fi
 
 # ---------------------------------------------------------------------------
 # Step 0: preprocess CelebA if CelebA32.pt is missing
@@ -89,8 +109,9 @@ for INDEX in $(seq 0 "$LAST_IDX"); do
         -O "$OPTIM" \
         -W "$NBASE" \
         -t -1 \
-        --index "$INDEX" \
-        -se "$INDEX"
+        -se "$INDEX" \
+        --save-root "$SAVE_ROOT" \
+        "${DURATION_ARGS[@]}"
 done
 
 # ---------------------------------------------------------------------------
@@ -103,7 +124,9 @@ for T in 50 100 150 200; do
     python compare_scores.py \
         -n "$N" -is 0 -ie "$LAST_IDX" \
         -s "$IMG_SIZE" -LR "$LR" -O "$OPTIM" -W "$NBASE" \
-        -t "$T" -Ns "$NS" -B "$BATCH"
+        -D CelebA -t "$T" -Ns "$SCORE_NS" -B "$BATCH" \
+        --model_root "$SAVE_ROOT" --out_dire "$SAVE_ROOT" \
+        --allow_missing_checkpoints
 done
 
 # ---------------------------------------------------------------------------
@@ -114,7 +137,9 @@ for INDEX in $(seq 0 "$LAST_IDX"); do
     python loss_compute.py \
         -n "$N" -i "$INDEX" \
         -s "$IMG_SIZE" -LR "$LR" -O "$OPTIM" -W "$NBASE" \
-        -B "$BATCH" --eval_N "$EVAL_N"
+        -B "$BATCH" --eval_N "$EVAL_N" \
+        --model_root "$SAVE_ROOT" --out_dire "$SAVE_ROOT" \
+        --allow_missing_checkpoints
 done
 
 # ---------------------------------------------------------------------------
@@ -123,13 +148,16 @@ done
 echo "=== Sample-split inference ==="
 python sample_split_inference.py \
     --scan_all_pairs \
-    -n "$N" -s "$IMG_SIZE" -LR "$LR" -O "$OPTIM" -W "$NBASE" -B "$BATCH"
+    --indices "0-$LAST_IDX" \
+    -n "$N" -s "$IMG_SIZE" -LR "$LR" -O "$OPTIM" -W "$NBASE" \
+    -B "$BATCH" -Ns "$SAMPLE_NS" \
+    --model-root "$SAVE_ROOT" --out-dir "$SAVE_ROOT"
 
 # ---------------------------------------------------------------------------
 # Step 5: aggregate cosine similarity + loss
 # ---------------------------------------------------------------------------
 echo "=== Cosine-similarity / loss aggregation ==="
 python cos_dis_aggregate.py \
-    -n "$N" -s "$IMG_SIZE" -LR "$LR" -O "$OPTIM" -W "$NBASE" -B "$BATCH"
+    --saves_dir "$SAVE_ROOT" -n "$N" --out_dir "$SAVE_ROOT"
 
 echo "=== Pipeline complete ==="

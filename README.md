@@ -43,6 +43,25 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For questions about the code or paper, please contact T. Bonnaire (tony.bonnaire@ens.fr) and/or R. Urfin (raphael.urfin@ens.fr).
 
+## Environment setup
+
+From the repository root, the primary setup is:
+
+```bash
+uv sync --frozen
+```
+
+The lock selects PyTorch 2.5.1 and torchvision 0.20.1 with CUDA 12.1 wheels
+on Linux x86-64 and native CPU wheels on macOS. Conda remains supported:
+
+```bash
+cd Experiments
+bash setup_env.sh --gpu  # CUDA 12.1
+bash setup_env.sh --cpu
+```
+
+`setup_environment.sh` remains as a backward-compatible interactive alias.
+
 # Changes
 
 Extensions to the [Bonnaire et al.](https://arxiv.org/abs/2505.17638) codebase for the
@@ -55,11 +74,12 @@ All paths below are relative to `Experiments/`.
 | File | Paper figure | Description |
 |------|-------------|-------------|
 | `src/Generation/compare_scores.py` | Fig. 2 | Noise-prediction sample-split analysis: computes cosine similarity between predicted noises from models trained on complementary data halves at fixed diffusion times |
-| `src/Generation/sample_split_inference.py` | Fig. 1(a) right, App. Fig. 7 | Paired sample generation from two models (same/different data) with nearest-neighbor retrieval and visualization |
+| `src/Generation/sample_split_inference.py` | Fig. 1(a) right, App. Fig. 8 | Paired sample generation from two models (same/different data) with nearest-neighbor retrieval and visualization |
 | `src/Generation/loss_compute.py` | Fig. 1(a) left | Per-checkpoint test loss (DSM) curves across training |
 | `src/Generation/cos_dis_aggregate.py` | Fig. 1(a) left | Aggregates per-pair cosine similarity and per-model test loss into the dual-axis plot |
 | `src/Training/run_train.sh` | — | End-to-end pipeline: preprocesses CelebA (if needed), trains U-Nets on complementary halves, then runs the full evaluation suite (noise-prediction comparison, loss curves, paired generation, aggregation) |
 | `src/Utils/preprocess_celeba.py` | — | Preprocesses raw CelebA images into a single tensor file for efficient training |
+| `src/Generation/celeba_multiscale_complexity_plot.py` | App. Fig. 7 | Accepted PCA/Haar-wavelet coarse-to-fine appendix figure |
 
 
 ## Modified files
@@ -80,7 +100,7 @@ training, and evaluation into a single run:
 ```bash
     # full pipeline with defaults (15 models, n=1024)
     cd Experiments/src/Training
-    RAW_CELEBA=/path/to/img_align_celeba bash run_train.sh
+    RAW_CELEBA=/path/to/img_align_celeba uv run bash run_train.sh
 
     # override number of models / dataset size
     bash run_train.sh --models 3 --n 512
@@ -98,28 +118,37 @@ Alternatively, each step can be run individually:
     cd ../Training
     for i in $(seq 0 14); do
         python run_Unet.py -n 1024 -i $i -s 32 -LR 0.0001 -O Adam -W 32 \
-                           -t -1 --index $i -se $i
+                           -t -1 -se $i --epochs 5000 \
+                           --save-root ../../Saves_new
     done
 
     # noise-prediction sample-split cosine similarity (Fig. 2)
     cd ../Generation
     for t in 50 100 150 200; do
         python compare_scores.py -n 1024 -is 0 -ie 14 -s 32 -LR 0.0001 \
-                                 -O Adam -W 32 -t $t -Ns 1000 -B 512
+                                 -O Adam -W 32 -D CelebA -t $t -Ns 1000 -B 512 \
+                                 --model_root ../../Saves_new \
+                                 --out_dire ../../Saves_new
     done
 
     # per-model test loss curves (Fig. 1a left)
     for i in $(seq 0 14); do
         python loss_compute.py -n 1024 -i $i -s 32 -LR 0.0001 -O Adam -W 32 \
-                               -B 512 --eval_N 50
+                               -B 512 --eval_N 50 \
+                               --model_root ../../Saves_new \
+                               --out_dire ../../Saves_new
     done
 
-    # paired sample generation with NN visualization (Fig. 1a right, App. Fig. 7)
+    # paired sample generation with NN visualization (Fig. 1a right, App. Fig. 8)
     python sample_split_inference.py --scan_all_pairs -n 1024 -s 32 \
-                                     -LR 0.0001 -O Adam -W 32 -B 512 -Ns 512
+                                     -LR 0.0001 -O Adam -W 32 -B 512 -Ns 512 \
+                                     --indices 0-14 \
+                                     --model-root ../../Saves_new \
+                                     --out-dir ../../Saves_new
 
     # aggregate cosine similarity + loss into dual-axis plot (Fig. 1a left)
-    python cos_dis_aggregate.py --saves_dir ../../Saves_new -n 1024
+    python cos_dis_aggregate.py --saves_dir ../../Saves_new -n 1024 \
+                                --out_dir ../../Saves_new
 ```
 
 ## CelebA multiscale filtering appendix
@@ -142,10 +171,11 @@ High-level recipe:
     # 2. Train split-indexed filtered models with run_Unet.py, using --data-file
     #    and a suffix such as Wavelet_L2 or PCA_L3.
     cd ../Training
-    # n=1024 and batch size 512 give two optimizer steps per epoch, so
-    # 7,000 steps reproduce the 3,500-epoch appendix training horizon.
+    # --epochs is preferred here. For n=1024 and batch size 512, this is
+    # equivalent to 7,000 optimizer steps.
     python run_Unet.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 \
-                       -t -1 -se 0 --steps 7000 \
+                       -t -1 -se 0 --epochs 3500 \
+                       --save-root ../../Saves_new \
                        --data-file ../../Data/CelebA_filtered/CelebA32_Wavelet_L2_index0.pt \
                        --suffix Wavelet_L2
 

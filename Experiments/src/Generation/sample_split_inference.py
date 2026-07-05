@@ -613,6 +613,10 @@ def main():
     # Seeds for generation / (only relevant for determinism; kept)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--model-root", type=str, default=None,
+                        help="Root containing trained model folders (default: Experiments/Saves_new).")
+    parser.add_argument("--out-dir", type=str, default=None,
+                        help="Root for generated comparison artifacts (default: model root).")
 
     # Metric / plotting choices
     parser.add_argument("--metric", type=str, default="pixel", choices=["pixel", "resnet"])
@@ -646,6 +650,8 @@ def main():
     config.BATCH_SIZE = int(args.batch_size)
     config.LR = float(args.learning_rate)
     size = int(args.img_size)
+    model_root = Path(args.model_root or config.path_save).expanduser().resolve()
+    output_root = Path(args.out_dir).expanduser().resolve() if args.out_dir else model_root
 
     seeds_run = [int(s) for s in args.seeds_run.split(",") if s.strip() != ""]
 
@@ -673,7 +679,7 @@ def main():
         resnet_fn = make_resnet50_feature_extractor(config.DEVICE)
 
     # Output dirs
-    out_dir = Path(config.path_save) / f"Comparisons_Mallat_final_{int(args.num)}_seed_{int(args.seed)}"
+    out_dir = output_root / f"Comparisons_Mallat_final_{int(args.num)}_seed_{int(args.seed)}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tag = f"metric_{args.metric}"
@@ -687,7 +693,7 @@ def main():
         indices = _parse_indices_spec(args.indices)
     else:
         prefix = f"{config.DATASET}{size}_{config.n_images}_{n_base}_{config.OPTIM}_{config.BATCH_SIZE}_{config.LR:.4f}_index"
-        indices = discover_available_indices(Path(config.path_save), prefix)
+        indices = discover_available_indices(model_root, prefix)
 
     indices = sorted(indices)
 
@@ -797,8 +803,8 @@ def main():
 
         ia10, ib10, sim10 = topk_corr_pairs(train_images_a, train_images_b, device=config.DEVICE, k=10)
 
-        topk_png = Path(config.path_save) / f"top10_train{index_a}_vs_train{index_b}_corr.png"
-        topk_npz = Path(config.path_save) / f"top10_train{index_a}_vs_train{index_b}_corr.npz"
+        topk_png = out_dir / f"top10_train{index_a}_vs_train{index_b}_corr.png"
+        topk_npz = out_dir / f"top10_train{index_a}_vs_train{index_b}_corr.npz"
         save_topk_pairs_png(train_images_a, train_images_b, ia10, ib10, sim10, topk_png)
         save_topk_pairs_npz(train_images_a, train_images_b, ia10, ib10, sim10, topk_npz)
 
@@ -830,8 +836,8 @@ def main():
             folder_a = build_folder_name(index_a, None)
             folder_b = build_folder_name(index_b, None)
 
-            path_a = Path(config.path_save) / folder_a / "Models" / f"Model_epoch_{checkpoint_id}"
-            path_b = Path(config.path_save) / folder_b / "Models" / f"Model_epoch_{checkpoint_id}"
+            path_a = model_root / folder_a / "Models" / f"Model_epoch_{checkpoint_id}"
+            path_b = model_root / folder_b / "Models" / f"Model_epoch_{checkpoint_id}"
             if not path_a.exists():
                 raise FileNotFoundError(f"Missing checkpoint: {path_a}")
             if not path_b.exists():

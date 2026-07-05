@@ -7,8 +7,13 @@ import os
 import numpy as np
 import argparse
 import glob
+import re
+import shutil
+from pathlib import Path
 
-sys.path.insert(1, '../Utils/')     # In case we run from Experiments/Training
+SCRIPT_DIR = Path(__file__).resolve().parent
+UTILS_DIR = SCRIPT_DIR.parent / 'Utils'
+sys.path.insert(1, str(UTILS_DIR))
 import Unet
 import Plot
 import Diffusion
@@ -28,10 +33,18 @@ parser.add_argument("-W", "--nbase", help="Number of base filters", type=str)
 parser.add_argument("-t", "--time", help="Diffusion timestep", type=int)
 parser.add_argument("-se", "--seed", help="Random seed", type=int, default=0)
 parser.add_argument("-sr", "--are_same_run", help="Whether this is meant to be used as same mode or not", action='store_true')
-parser.add_argument("--steps", help="Number of training steps (default: 2e6)", type=int, default=None)
+duration = parser.add_mutually_exclusive_group()
+duration.add_argument("--steps", help="Total number of optimizer steps (default: 2e6)", type=int, default=None)
+duration.add_argument("--epochs", help="Number of complete passes over the training split", type=int, default=None)
 parser.add_argument("--save-every", help="Save checkpoint every N steps (overrides default schedule)", type=int, default=None)
 parser.add_argument("--num-checkpoints", help="Number of log-spaced checkpoints to save", type=int, default=None)
 parser.add_argument("--suffix", help="Suffix to append to save folder name", type=str, default=None)
+parser.add_argument("--save-root", type=str, default=None,
+                    help="Directory containing model run folders (default: Experiments/Saves_new).")
+parser.add_argument("--device", type=str, default=None,
+                    help="Training device (default: cuda:0 when available, otherwise cpu).")
+parser.add_argument("--no-generate", action="store_true",
+                    help="Skip sample generation at step checkpoints (useful for smoke tests).")
 parser.add_argument("--data-file", type=str, default=None,
                     help="Override: path to a pre-split train .pt tensor [N,1,H,W].")
 parser.add_argument("--data-test-file", type=str, default=None,
@@ -69,8 +82,19 @@ config.BATCH_SIZE = min(512, n)
 config.OPTIM = optim
 config.LR = lr
 config.mode = mode
+config.DEVICE = args['device'] or ('cuda:0' if torch.cuda.is_available() else 'cpu')
 if args['steps'] is not None:
+    if args['steps'] <= 0:
+        parser.error("--steps must be positive")
     config.N_STEPS = args['steps']
+elif args['epochs'] is not None:
+    if args['epochs'] <= 0:
+        parser.error("--epochs must be positive")
+    config.N_STEPS = cfg.optimizer_steps_for_epochs(
+        config.n_images, config.BATCH_SIZE, args['epochs']
+    )
+if args['save_root'] is not None:
+    config.path_save = str(Path(args['save_root']).expanduser().resolve()) + os.sep
 config.time_step = time_step
 
 if config.mode == 'normal':
@@ -100,14 +124,14 @@ if args['suffix'] is not None:
 suffix = suffix.rstrip('/') + '/'
 
 # Create path to images and model save
-path_images = config.path_save + suffix + 'Images/'
-path_models = config.path_save + suffix + 'Models/'
+path_images = os.path.join(config.path_save, suffix, 'Images') + os.sep
+path_models = os.path.join(config.path_save, suffix, 'Models') + os.sep
 os.makedirs(path_images, exist_ok=True)
 os.makedirs(path_models, exist_ok=True)
 
-os.system('cp run_Unet.py {:s}'.format(path_models + '_run_Unet.py'))
-os.system('cp ../Utils/loader.py {:s}'.format(path_models + '_loader.py'))
-os.system('cp ../Utils/cfg.py {:s}'.format(path_models + '_cfg.py'))
+shutil.copy2(__file__, path_models + '_run_Unet.py')
+shutil.copy2(UTILS_DIR / 'loader.py', path_models + '_loader.py')
+shutil.copy2(UTILS_DIR / 'cfg.py', path_models + '_cfg.py')
 
 # Raw images version
 # loading_func = 'loader.load_{:s}(config, index={:d})'.format(config.DATASET, index)
@@ -174,20 +198,21 @@ if __name__ == '__main__':
     
     # Resume training from last weights in the folder
     weights_files = glob.glob(os.path.join(path_models, 'Model_*'))
-    if weights_files:   # If exist, use it
-        offset = max([int(f.split('_')[-1]) for f in weights_files])
-    else:               # If not, start from 0
-        offset = 0
+    step_checkpoints = []
+    for checkpoint in weights_files:
+        match = re.fullmatch(r'Model_(\d+)', os.path.basename(checkpoint))
+        if match:
+            step_checkpoints.append((int(match.group(1)), checkpoint))
+    offset = max((step for step, _ in step_checkpoints), default=0)
     
     if offset > 0:
-        path_checkpoint = os.path.join(path_models, 'Model_epoch_{:d}'.format(offset))
-        if not os.path.exists(path_checkpoint):
-            path_checkpoint = os.path.join(path_models, 'Model_{:d}'.format(offset))
+        path_checkpoint = os.path.join(path_models, 'Model_{:d}'.format(offset))
         model = loader.load_model(model, path_checkpoint)
         model.to(config.DEVICE)
     
     model.to(config.DEVICE)
-    model = nn.DataParallel(model, device_ids = [0])
+    if torch.device(config.DEVICE).type == 'cuda':
+        model = nn.DataParallel(model, device_ids=[torch.device(config.DEVICE).index or 0])
     #model = torch.compile(model)
 
 if __name__ == '__main__':
@@ -225,8 +250,16 @@ if __name__ == '__main__':
         times_save = cfg.get_training_times()
     
     # Print epochs info
-    epochs = config.N_STEPS // (config.n_images // config.BATCH_SIZE)
+    steps_per_epoch = len(trainloader)
+    epochs = int(np.ceil(config.N_STEPS / steps_per_epoch))
     print(f'Training: {config.N_STEPS} steps = {epochs} epochs')
     
-    Diffusion.train(model, trainloader, optimizer, config, df, 
-                    loss_fn, sweeping, times_save, offset, suffix, generate=True, valloader=testloader)
+    final_step = Diffusion.train(
+        model, trainloader, optimizer, config, df,
+        loss_fn, sweeping, times_save, offset, suffix,
+        generate=not args['no_generate'], valloader=testloader,
+    )
+    final_checkpoint = os.path.join(path_models, f'Model_{final_step}')
+    if not os.path.exists(final_checkpoint):
+        torch.save(model.state_dict(), final_checkpoint)
+        print(f'Final optimizer-step checkpoint saved: {final_checkpoint}')

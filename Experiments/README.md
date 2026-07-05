@@ -4,45 +4,25 @@ This repository contains code for the numerical experiments carried out in the p
 
 ## Quick Setup
 
-### Option 1: Automated Setup (Recommended)
+### Option 1: uv (Recommended)
 
-Run the setup script:
 ```bash
-chmod +x setup_environment.sh
-./setup_environment.sh
+cd ..
+uv sync --frozen
 ```
 
-The script will guide you through:
-1. Checking if conda is installed
-2. Choosing between GPU or CPU version
-3. Creating the environment
-4. Providing activation instructions
+On Linux x86-64 this installs the locked CUDA 12.1 PyTorch wheels. On macOS
+it installs the corresponding native CPU wheels.
 
-### Option 2: Manual Setup
+### Option 2: conda
 
-#### For GPU (CUDA 11.8):
 ```bash
-conda env create -f environment.yml
+bash setup_env.sh --gpu
+bash setup_env.sh --cpu
 ```
 
-#### For CPU-only:
-```bash
-conda env create -f environment_cpu.yml
-```
-
-#### For CUDA 12.x:
-Edit `environment.yml` and change:
-```yaml
-- pytorch-cuda=11.8
-```
-to:
-```yaml
-- pytorch-cuda=12.1
-```
-Then run:
-```bash
-conda env create -f environment.yml
-```
+The GPU file pins PyTorch 2.5.1, torchvision 0.20.1, and CUDA 12.1.
+`setup_environment.sh` is retained as the interactive legacy entry point.
 
 ### Option 3: Manual (with pip)
 Sometimes, conda environment creation from `yml` can be very slow.
@@ -76,9 +56,10 @@ Parameters:
 ### Example 2: CelebA Training
 ```bash
 cd Experiments/src/Training
-python run_Unet.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 -t -1
+python run_Unet.py -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 -t -1 \
+                   --epochs 5000 --save-root ../../Saves_new
 ```
-The models and generated images along training will be stored in `Experiments/Saves/CelebA32_1024_32_Adam_512_0.0001_index0`.
+The models and generated images along training will be stored in `Experiments/Saves_new/CelebA32_1024_32_Adam_512_0.0001_index0`.
 
 Parameters:
 - `-n`: Number of training images (1024)
@@ -88,6 +69,9 @@ Parameters:
 - `-O`: Optimizer (Adam or SGD_Momentum)
 - `-W`: Number of base filters (32)
 - `-t`: Time step (-1 for normal mode, integer in [0, T-1] for fixed-time training)
+- `--epochs`: Number of complete passes over the training split. `--steps`
+  remains available and denotes total optimizer updates.
+- `--save-root`: Isolated output root for checkpoints and generated samples.
 
 ### Example 3: Generation with trained U-Net models
 
@@ -97,7 +81,7 @@ Example:
 cd Experiments/src/Generation
 python generate.py -D CelebA -n 1024 -i 0 -s 32 -B 512 -LR 0.0001 -O Adam -W 32 -Ns 100 --device cuda:0
 ```
-It will create a folder `Samples` in `Experiments/Saves/CelebA32_1024_32_Adam_512_0.0001_index0` with multiples subfolders corresponding to the several snapshot of trained models.
+It will create a folder `Samples` in `Experiments/Saves_new/CelebA32_1024_32_Adam_512_0.0001_index0` with multiple subfolders corresponding to the saved training checkpoints.
 To modify these generation times, you can modify `generate.py`, making sure it fits the models saved in `run_Unet.py` as well.
 
 Parameters:
@@ -122,7 +106,7 @@ cd Experiments/src/Evaluation
 python compute_fmem.py -D CelebA -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 -B 512 -Ns 1 --gap_threshold 0.333 --device cuda:0
 ```
 
-This will analyze the generated samples from the corresponding model and save memorization metrics to `Experiments/Saves/CelebA32_1024_32_Adam_512_0.0001_index0/Memorization/fraction_collapse.txt`.
+This will analyze the generated samples from the corresponding model and save memorization metrics to `Experiments/Saves_new/CelebA32_1024_32_Adam_512_0.0001_index0/Memorization/fraction_collapse.txt`.
 
 Parameters:
 - `-D`: Dataset (CelebA)
@@ -151,7 +135,7 @@ cd Experiments/src/Evaluation
 python compute_FID.py -D CelebA -n 1024 -i 0 -s 32 -LR 0.0001 -O Adam -W 32 -B 512 -istat 1 --N1 0 --N2 1 --device cuda:0
 ```
 
-This will compute FID scores for all training checkpoints and save results to `Experiments/Saves/FID/CelebA32_1024_32_Adam_512_0.0001_index0/FID_1.txt`.
+This will compute FID scores for all training checkpoints and save results to `Experiments/Saves_new/FID/CelebA32_1024_32_Adam_512_0.0001_index0/FID_1.txt`.
 
 Parameters:
 - `-D`: Dataset (CelebA)
@@ -162,7 +146,7 @@ Parameters:
 - `-O`: Optimizer (Adam or SGD_Momentum)
 - `-W`: Number of base filters (32)
 - `-B`: Batch size (512)
-- `-istat`: Index of reference statistics file (1-5, corresponds to `stats1.npz` through `stats5.npz` in the `Experiments/Saves/FID_ref`folder.)
+- `-istat`: Index of reference statistics file (1-5, corresponds to `stats1.npz` through `stats5.npz` in the `Experiments/Saves_new/FID_ref` folder.)
 - `--N1`: Starting batch index for analysis (default: 0)
 - `--N2`: Ending batch index for analysis (default: 100)
 - `--batch_size_samples`: Size of each generated sample batch (default: 100)
@@ -170,7 +154,7 @@ Parameters:
 
 **Prerequisites**: 
 1. Generated samples from `generate.py` (Example 3)
-2. Reference statistics file (`../Saves/FID/stats{istat}.npz`) must exist
+2. Reference statistics file (`Experiments/Saves_new/FID_ref/stats{istat}.npz`) must exist
 3. `pytorch-fid` package installed (`pip install pytorch-fid`)
 
 **Note**: The script temporarily saves images as PNG files for FID computation and automatically cleans them up afterward to save disk space.
@@ -200,7 +184,7 @@ If you run out of GPU memory:
 ## Dependencies
 
 Main packages included:
-- PyTorch >= 2.0.0 (with CUDA 11.8 or CPU)
+- PyTorch 2.5.1 with torchvision 0.20.1 (CUDA 12.1 on Linux GPU systems)
 - torchvision
 - numpy >= 1.23.0
 - matplotlib >= 3.7.0
