@@ -19,6 +19,7 @@ torchvision==0.20.1
 # Core scientific computing
 numpy>=1.23.0
 scipy>=1.10.0
+setuptools>=69
 
 # Plotting and visualization
 matplotlib>=3.7.0

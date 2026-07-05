@@ -17,5 +17,6 @@ dependencies:
   - natsort
   - pytest
   - pip
+  - setuptools>=69
   - pip:
       - pytorch-fid==0.3.0
