@@ -166,6 +166,7 @@ else:
 # In[]
 
 if __name__ == '__main__':
+    testloader = None
     trainloader = torch.utils.data.DataLoader(train_images, 
                                               batch_size=config.BATCH_SIZE,
                                               shuffle=True)
