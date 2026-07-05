@@ -8,6 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UTILS_DIR = REPO_ROOT / "Experiments/src/Utils"
 TRAIN_SCRIPT = REPO_ROOT / "Experiments/src/Training/run_Unet.py"
+PIPELINE_SCRIPT = REPO_ROOT / "Experiments/src/Training/run_train.sh"
 
 
 def _load_cfg(monkeypatch):
@@ -67,3 +68,10 @@ def test_run_unet_help_is_independent_of_current_directory(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "--epochs" in result.stdout
     assert "--save-root" in result.stdout
+
+
+def test_pipeline_defaults_match_paper_evaluation_counts():
+    pipeline = PIPELINE_SCRIPT.read_text()
+
+    assert 'SCORE_NS="${SCORE_NS:-${NS:-1000}}"' in pipeline
+    assert 'SAMPLE_NS="${SAMPLE_NS:-${NS:-512}}"' in pipeline
