@@ -165,10 +165,9 @@ def inspect_data(data, levels):
     return report
 
 
-def plot(data, methods, levels, out_dir: Path, out_stem: str, title: str | None):
-    plt.rcParams.update({
-        "text.usetex": True,
-        "text.latex.preamble": r"\usepackage{amsfonts}",
+def plot(data, methods, levels, out_dir: Path, out_stem: str, title: str | None, use_tex: bool = False):
+    rc_params = {
+        "text.usetex": use_tex,
         "figure.dpi": 140,
         "savefig.dpi": 300,
         "font.size": 12,
@@ -178,7 +177,10 @@ def plot(data, methods, levels, out_dir: Path, out_stem: str, title: str | None)
         "ytick.labelsize": 11,
         "legend.fontsize": 10.5,
         "legend.frameon": False,
-    })
+    }
+    if use_tex:
+        rc_params["text.latex.preamble"] = r"\usepackage{amsfonts}"
+    plt.rcParams.update(rc_params)
 
     fig, axes = plt.subplots(1, len(methods), figsize=(9.6, 4.2), sharey=True)
     if len(methods) == 1:
@@ -376,6 +378,7 @@ def main():
     parser.add_argument("--out-dir", type=str, default=None)
     parser.add_argument("--out-stem", type=str, default="celeba_wavelet_pca_complexity")
     parser.add_argument("--title", type=str, default=None)
+    parser.add_argument("--use-tex", action="store_true", help="Render labels with an external LaTeX installation.")
     parser.add_argument("--copy-to-figs", type=str, default=None)
     args = parser.parse_args()
 
@@ -386,7 +389,7 @@ def main():
 
     data = collect_data(result_root, methods, levels, int(args.time))
     report = inspect_data(data, levels)
-    paths = plot(data, methods, levels, out_dir, args.out_stem, args.title)
+    paths = plot(data, methods, levels, out_dir, args.out_stem, args.title, use_tex=args.use_tex)
     save_tables(data, report, methods, levels, out_dir, args.out_stem, args)
 
     print("\nInspection summary:")
